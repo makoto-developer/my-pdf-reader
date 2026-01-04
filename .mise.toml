@@ -1,0 +1,8 @@
+[tools]
+node = "24.9.0"
+rust = "1.90.0"
+
+[env]
+# Tauri環境変数
+TAURI_PRIVATE_KEY = ""
+TAURI_KEY_PASSWORD = ""
