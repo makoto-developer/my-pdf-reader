@@ -7,14 +7,19 @@ import { NewSetDialog } from './NewSetDialog'
 
 interface SetListProps {
   onOpenSet: (set: PDFSet) => void
+  onOpenSettings: () => void
 }
 
-export function SetList({ onOpenSet }: SetListProps): React.ReactElement {
-  const { sets, isLoading, error, createSet, deleteSet } = usePDFSets()
+export function SetList({ onOpenSet, onOpenSettings }: SetListProps): React.ReactElement {
+  const { sets, isLoading, error, createSet, updateSet, deleteSet } = usePDFSets()
   const [isDialogOpen, setIsDialogOpen] = useState(false)
 
   const handleCreateSet = async (params: CreatePDFSetParams): Promise<void> => {
     await createSet(params)
+  }
+
+  const handleUpdateSet = async (id: string, name: string): Promise<void> => {
+    await updateSet(id, name)
   }
 
   if (isLoading) {
@@ -41,9 +46,18 @@ export function SetList({ onOpenSet }: SetListProps): React.ReactElement {
       <header className="bg-white shadow">
         <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8 flex justify-between items-center">
           <h1 className="text-3xl font-bold text-gray-900">My PDF Reader</h1>
-          <Button onClick={() => setIsDialogOpen(true)} variant="primary">
-            + 新しいセット
-          </Button>
+          <div className="flex gap-3">
+            <button
+              onClick={onOpenSettings}
+              className="px-4 py-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-md transition-colors"
+              title="設定"
+            >
+              ⚙️ 設定
+            </button>
+            <Button onClick={() => setIsDialogOpen(true)} variant="primary">
+              + 新しいセット
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -62,6 +76,7 @@ export function SetList({ onOpenSet }: SetListProps): React.ReactElement {
                 key={set.id}
                 set={set}
                 onOpen={onOpenSet}
+                onUpdate={handleUpdateSet}
                 onDelete={deleteSet}
               />
             ))}

@@ -8,6 +8,7 @@ interface UsePDFSetsReturn {
   error: string | null
   refresh: () => Promise<void>
   createSet: (params: CreatePDFSetParams) => Promise<PDFSet>
+  updateSet: (id: string, name: string) => Promise<PDFSet>
   deleteSet: (id: string) => Promise<void>
 }
 
@@ -44,6 +45,17 @@ export function usePDFSets(): UsePDFSetsReturn {
     []
   )
 
+  const updateSet = useCallback(async (id: string, name: string): Promise<PDFSet> => {
+    try {
+      const updatedSet = await pdfSetApi.update(id, name)
+      setSets((prev) => prev.map((set) => (set.id === id ? updatedSet : set)))
+      return updatedSet
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '不明なエラーが発生しました'
+      throw new Error(message)
+    }
+  }, [])
+
   const deleteSet = useCallback(async (id: string): Promise<void> => {
     try {
       await pdfSetApi.delete(id)
@@ -65,6 +77,7 @@ export function usePDFSets(): UsePDFSetsReturn {
     error,
     refresh,
     createSet,
+    updateSet,
     deleteSet,
   }
 }

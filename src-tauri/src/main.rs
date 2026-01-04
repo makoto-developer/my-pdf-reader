@@ -4,7 +4,10 @@
 mod commands;
 mod models;
 
-use commands::{create_pdf_set, delete_pdf_set, list_pdf_sets};
+use commands::{
+    create_pdf_set, delete_pdf_set, list_pdf_sets, update_pdf_set,
+    get_config, update_config, select_directory,
+};
 
 fn main() {
     tauri::Builder::default()
@@ -14,7 +17,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             create_pdf_set,
             list_pdf_sets,
+            update_pdf_set,
             delete_pdf_set,
+            get_config,
+            update_config,
+            select_directory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

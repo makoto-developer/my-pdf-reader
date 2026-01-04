@@ -8,12 +8,18 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dis
 interface PDFPanelProps {
   pdfPath: string
   title: string
-  scrollTop: number
-  onScroll: (scrollTop: number) => void
+  scrollRatio: number
+  onScroll: (ratio: number) => void
   align: 'left' | 'right' | 'center'
 }
 
-export function PDFPanel({ pdfPath, title, scrollTop, onScroll, align }: PDFPanelProps): React.ReactElement {
+export function PDFPanel({
+  pdfPath,
+  title,
+  scrollRatio,
+  onScroll,
+  align,
+}: PDFPanelProps): React.ReactElement {
   const canvasRefs = useRef<(HTMLCanvasElement | null)[]>([])
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -22,16 +28,16 @@ export function PDFPanel({ pdfPath, title, scrollTop, onScroll, align }: PDFPane
   const [pdfDocument, setPdfDocument] = useState<pdfjsLib.PDFDocumentProxy | null>(null)
   const isScrollingProgrammatically = useRef(false)
   const renderedPagesRef = useRef<Set<number>>(new Set())
+  const lastUserScrollRatioRef = useRef<number>(0)
 
   // PDFを読み込む
   useEffect(() => {
     const loadPDF = async (): Promise<void> => {
       setIsLoading(true)
       setError(null)
-      renderedPagesRef.current.clear() // レンダリング済みページをクリア
+      renderedPagesRef.current.clear()
 
       try {
-        // Convert Tauri filesystem path to asset URL
         const assetUrl = convertFileSrc(pdfPath)
         console.log('Loading PDF from:', pdfPath, '→', assetUrl)
         const loadingTask = pdfjsLib.getDocument(assetUrl)
@@ -50,21 +56,35 @@ export function PDFPanel({ pdfPath, title, scrollTop, onScroll, align }: PDFPane
     loadPDF()
   }, [pdfPath])
 
-  // スクロール位置を同期
+  // スクロール比率を同期
   useEffect(() => {
     if (!scrollContainerRef.current) return
 
+    const container = scrollContainerRef.current
+    const maxScroll = container.scrollHeight - container.clientHeight
+
+    if (maxScroll <= 0) return
+
+    // 親から受け取ったスクロール比率が、自分が最後に送信した比率と同じ場合はスキップ
+    // （無限ループ防止）
+    if (Math.abs(scrollRatio - lastUserScrollRatioRef.current) < 0.001) {
+      return
+    }
+
     // プログラムによるスクロールフラグを立てる
     isScrollingProgrammatically.current = true
-    scrollContainerRef.current.scrollTop = scrollTop
 
-    // 少し遅延させてフラグを戻す
-    const timer = setTimeout(() => {
+    // スクロール比率から実際のスクロール位置を計算
+    const targetScrollTop = scrollRatio * maxScroll
+
+    // 同期的にスクロール位置を更新
+    container.scrollTop = targetScrollTop
+
+    // フラグを戻す（次のフレームで）
+    requestAnimationFrame(() => {
       isScrollingProgrammatically.current = false
-    }, 50)
-
-    return () => clearTimeout(timer)
-  }, [scrollTop])
+    })
+  }, [scrollRatio])
 
   // スクロールイベントハンドラ
   const handleScroll = (e: React.UIEvent<HTMLDivElement>): void => {
@@ -72,7 +92,20 @@ export function PDFPanel({ pdfPath, title, scrollTop, onScroll, align }: PDFPane
     if (isScrollingProgrammatically.current) return
 
     const target = e.currentTarget
-    onScroll(target.scrollTop)
+    const maxScroll = target.scrollHeight - target.clientHeight
+
+    if (maxScroll <= 0) {
+      return
+    }
+
+    // スクロール比率を計算（0-1の範囲）
+    const ratio = target.scrollTop / maxScroll
+
+    // 最後に送信した比率を記録
+    lastUserScrollRatioRef.current = ratio
+
+    // 親に通知
+    onScroll(ratio)
   }
 
   // すべてのページをレンダリング
@@ -89,7 +122,6 @@ export function PDFPanel({ pdfPath, title, scrollTop, onScroll, align }: PDFPane
 
           // 既にレンダリング済みのページはスキップ
           if (renderedPagesRef.current.has(pageNum)) {
-            console.log('Page already rendered, skipping:', pageNum)
             continue
           }
 
@@ -114,7 +146,6 @@ export function PDFPanel({ pdfPath, title, scrollTop, onScroll, align }: PDFPane
           try {
             await renderTask.promise
             renderedPagesRef.current.add(pageNum)
-            console.log('Page rendered:', pageNum)
           } catch (err) {
             // キャンセルエラーは無視
             if (err instanceof Error && err.name === 'RenderingCancelledException') {
@@ -134,7 +165,6 @@ export function PDFPanel({ pdfPath, title, scrollTop, onScroll, align }: PDFPane
 
     renderAllPages()
 
-    // クリーンアップ: すべてのレンダリングタスクをキャンセル
     return () => {
       isCancelled = true
       renderTasks.forEach((task) => {

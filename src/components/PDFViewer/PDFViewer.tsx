@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import type { PDFSet } from '@/domain/PDFSet'
 import { PDFPanel } from './PDFPanel'
 import { Button } from '../common/Button'
@@ -9,8 +9,22 @@ interface PDFViewerProps {
 }
 
 export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElement {
-  const [scrollTop, setScrollTop] = useState(0)
   const [centerAlign, setCenterAlign] = useState(true)
+  const [scrollRatio, setScrollRatio] = useState(0)
+  const rafIdRef = useRef<number | null>(null)
+
+  const handleScroll = useCallback((ratio: number) => {
+    // 既存のrequestAnimationFrameをキャンセル
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current)
+    }
+
+    // requestAnimationFrameを使ってスムーズに更新
+    rafIdRef.current = requestAnimationFrame(() => {
+      setScrollRatio(ratio)
+      rafIdRef.current = null
+    })
+  }, [])
 
   return (
     <div className="h-screen flex flex-col bg-gray-100">
@@ -39,8 +53,8 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
           <PDFPanel
             pdfPath={pdfSet.originalPdfPath}
             title="原文"
-            scrollTop={scrollTop}
-            onScroll={setScrollTop}
+            scrollRatio={scrollRatio}
+            onScroll={handleScroll}
             align={centerAlign ? 'right' : 'center'}
           />
         </div>
@@ -48,8 +62,8 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
           <PDFPanel
             pdfPath={pdfSet.translatedPdfPath}
             title="翻訳"
-            scrollTop={scrollTop}
-            onScroll={setScrollTop}
+            scrollRatio={scrollRatio}
+            onScroll={handleScroll}
             align={centerAlign ? 'left' : 'center'}
           />
         </div>

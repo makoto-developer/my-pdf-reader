@@ -25,7 +25,14 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA", "$APPDATA/**", "$RESOURCE", "$RESOURCE/**", "./pdfs", "./pdfs/**"]
+        "scope": [
+          "$APPDATA",
+          "$APPDATA/**",
+          "$RESOURCE",
+          "$RESOURCE/**",
+          "/Users/user/work/repositories/github.com/makoto-developer/my-pdf-reader/pdfs",
+          "/Users/user/work/repositories/github.com/makoto-developer/my-pdf-reader/pdfs/**"
+        ]
       }
     }
   },

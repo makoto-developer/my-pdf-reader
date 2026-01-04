@@ -4,7 +4,10 @@ import type { PDFSet, CreatePDFSetParams } from '@/domain/PDFSet'
 export const pdfSetApi = {
   async list(): Promise<PDFSet[]> {
     try {
+      console.log('Calling invoke for list_pdf_sets')
+      console.log('invoke function:', invoke)
       const sets = await invoke<PDFSet[]>('list_pdf_sets')
+      console.log('Received sets:', sets)
       return sets
     } catch (error) {
       console.error('Failed to list PDF sets:', error)
@@ -23,6 +26,16 @@ export const pdfSetApi = {
     } catch (error) {
       console.error('Failed to create PDF set:', error)
       throw new Error('PDFセットの作成に失敗しました')
+    }
+  },
+
+  async update(id: string, name: string): Promise<PDFSet> {
+    try {
+      const set = await invoke<PDFSet>('update_pdf_set', { id, name })
+      return set
+    } catch (error) {
+      console.error('Failed to update PDF set:', error)
+      throw new Error('PDFセットの更新に失敗しました')
     }
   },
 

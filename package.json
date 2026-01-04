@@ -4,6 +4,12 @@
   "type": "module",
   "private": true,
   "description": "PDF comparison viewer for reading original and translated papers side by side",
+  "author": "makoto-developer",
+  "license": "CC-BY-NC-4.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/makoto-developer/my-pdf-reader"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
@@ -11,6 +17,7 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
+    "deploy:macos": "bash scripts/deploy-macos.sh",
     "test": "vitest",
     "test:ui": "vitest --ui",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
