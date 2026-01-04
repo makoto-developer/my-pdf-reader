@@ -1,5 +1,6 @@
 import type { PDFSet } from '@/domain/PDFSet'
 import { Button } from '../common/Button'
+import { confirm } from '@tauri-apps/plugin-dialog'
 
 interface SetCardProps {
   set: PDFSet
@@ -8,8 +9,15 @@ interface SetCardProps {
 }
 
 export function SetCard({ set, onOpen, onDelete }: SetCardProps): React.ReactElement {
-  const handleDelete = (): void => {
-    if (window.confirm(`「${set.name}」を削除してもよろしいですか？`)) {
+  const handleDelete = async (): Promise<void> => {
+    const confirmed = await confirm(`「${set.name}」を削除してもよろしいですか？`, {
+      title: '削除の確認',
+      kind: 'warning',
+      okLabel: '削除',
+      cancelLabel: 'キャンセル',
+    })
+
+    if (confirmed) {
       onDelete(set.id)
     }
   }
