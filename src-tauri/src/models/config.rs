@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
+use log::{info, error, debug};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -38,19 +39,31 @@ impl AppConfig {
     /// 設定を読み込む（存在しない場合はデフォルト設定を保存）
     pub fn load(app_handle: &AppHandle) -> Result<Self, String> {
         let config_path = Self::config_path(app_handle)?;
+        debug!("Loading config from: {:?}", config_path);
         
         if config_path.exists() {
             let json = fs::read_to_string(&config_path)
-                .map_err(|e| format!("Failed to read config: {}", e))?;
+                .map_err(|e| {
+                    let msg = format!("Failed to read config: {}", e);
+                    error!("{}", msg);
+                    msg
+                })?;
             
             let config: AppConfig = serde_json::from_str(&json)
-                .map_err(|e| format!("Failed to parse config: {}", e))?;
+                .map_err(|e| {
+                    let msg = format!("Failed to parse config: {}", e);
+                    error!("{}", msg);
+                    msg
+                })?;
             
+            info!("Config loaded successfully from {:?}", config_path);
             Ok(config)
         } else {
+            info!("Config file not found, creating default config");
             // デフォルト設定を作成して保存
             let config = AppConfig::default();
             config.save(app_handle)?;
+            info!("Default config created and saved");
             Ok(config)
         }
     }
@@ -71,10 +84,17 @@ impl AppConfig {
     /// PDFディレクトリを取得（存在しない場合は作成）
     pub fn get_pdfs_directory(&self) -> Result<PathBuf, String> {
         let dir = PathBuf::from(&self.pdfs_directory);
+        debug!("Checking PDFs directory: {:?}", dir);
         
         if !dir.exists() {
+            info!("PDFs directory does not exist, creating: {:?}", dir);
             fs::create_dir_all(&dir)
-                .map_err(|e| format!("Failed to create pdfs directory: {}", e))?;
+                .map_err(|e| {
+                    let msg = format!("Failed to create pdfs directory: {}", e);
+                    error!("{}", msg);
+                    msg
+                })?;
+            info!("PDFs directory created successfully");
         }
         
         Ok(dir)

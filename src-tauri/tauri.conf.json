@@ -5,7 +5,7 @@
   "identifier": "com.makoto-developer.my-pdf-reader",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:14050",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -30,8 +30,8 @@
           "$APPDATA/**",
           "$RESOURCE",
           "$RESOURCE/**",
-          "/Users/user/work/repositories/github.com/makoto-developer/my-pdf-reader/pdfs",
-          "/Users/user/work/repositories/github.com/makoto-developer/my-pdf-reader/pdfs/**"
+          "$HOME",
+          "$HOME/**"
         ]
       }
     }

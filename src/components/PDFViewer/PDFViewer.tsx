@@ -1,7 +1,8 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import type { PDFSet } from '@/domain/PDFSet'
 import { PDFPanel } from './PDFPanel'
 import { Button } from '../common/Button'
+import { logger } from '@/utils/logger'
 
 interface PDFViewerProps {
   pdfSet: PDFSet
@@ -12,19 +13,73 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
   const [centerAlign, setCenterAlign] = useState(true)
   const [scrollRatio, setScrollRatio] = useState(0)
   const rafIdRef = useRef<number | null>(null)
+  const scrollSourceRef = useRef<string>('')
 
-  const handleScroll = useCallback((ratio: number) => {
+  // scrollRatioの変更を監視
+  useEffect(() => {
+    logger.info('PDFViewer', 'scrollRatio更新', {
+      比率: scrollRatio.toFixed(4),
+      更新元: scrollSourceRef.current,
+    })
+  }, [scrollRatio])
+
+  const handleScrollOriginal = useCallback((ratio: number) => {
+    const sourceLabel = '原文'
+
+    logger.debug('PDFViewer', 'handleScroll呼び出し', {
+      送信元: sourceLabel,
+      受信比率: ratio.toFixed(4),
+      現在比率: scrollRatio.toFixed(4),
+      差分: Math.abs(ratio - scrollRatio).toFixed(4),
+      RAF保留中: rafIdRef.current !== null,
+    })
+
     // 既存のrequestAnimationFrameをキャンセル
     if (rafIdRef.current !== null) {
+      logger.debug('PDFViewer', '保留中のRAFをキャンセル')
       cancelAnimationFrame(rafIdRef.current)
     }
 
     // requestAnimationFrameを使ってスムーズに更新
     rafIdRef.current = requestAnimationFrame(() => {
+      logger.debug('PDFViewer', 'RAF実行', {
+        送信元: sourceLabel,
+        新比率: ratio.toFixed(4),
+      })
+      scrollSourceRef.current = sourceLabel
       setScrollRatio(ratio)
       rafIdRef.current = null
     })
-  }, [])
+  }, [scrollRatio])
+
+  const handleScrollTranslated = useCallback((ratio: number) => {
+    const sourceLabel = '翻訳'
+
+    logger.debug('PDFViewer', 'handleScroll呼び出し', {
+      送信元: sourceLabel,
+      受信比率: ratio.toFixed(4),
+      現在比率: scrollRatio.toFixed(4),
+      差分: Math.abs(ratio - scrollRatio).toFixed(4),
+      RAF保留中: rafIdRef.current !== null,
+    })
+
+    // 既存のrequestAnimationFrameをキャンセル
+    if (rafIdRef.current !== null) {
+      logger.debug('PDFViewer', '保留中のRAFをキャンセル')
+      cancelAnimationFrame(rafIdRef.current)
+    }
+
+    // requestAnimationFrameを使ってスムーズに更新
+    rafIdRef.current = requestAnimationFrame(() => {
+      logger.debug('PDFViewer', 'RAF実行', {
+        送信元: sourceLabel,
+        新比率: ratio.toFixed(4),
+      })
+      scrollSourceRef.current = sourceLabel
+      setScrollRatio(ratio)
+      rafIdRef.current = null
+    })
+  }, [scrollRatio])
 
   return (
     <div className="h-screen flex flex-col bg-gray-100">
@@ -54,7 +109,7 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
             pdfPath={pdfSet.originalPdfPath}
             title="原文"
             scrollRatio={scrollRatio}
-            onScroll={handleScroll}
+            onScroll={handleScrollOriginal}
             align={centerAlign ? 'right' : 'center'}
           />
         </div>
@@ -63,7 +118,7 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
             pdfPath={pdfSet.translatedPdfPath}
             title="翻訳"
             scrollRatio={scrollRatio}
-            onScroll={handleScroll}
+            onScroll={handleScrollTranslated}
             align={centerAlign ? 'left' : 'center'}
           />
         </div>

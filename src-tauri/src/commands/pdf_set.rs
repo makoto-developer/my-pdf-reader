@@ -2,6 +2,7 @@ use crate::models::{PDFSet, AppConfig};
 use std::fs;
 use std::path::PathBuf;
 use tauri::AppHandle;
+use log::{info, error, debug};
 
 fn get_pdfs_base_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
     let config = AppConfig::load(app_handle)?;
@@ -20,7 +21,7 @@ pub async fn create_pdf_set(
     let pdfs_dir = get_pdfs_base_dir(&app_handle)?;
     let set_dir = pdfs_dir.join(&pdf_set.id);
 
-    println!("PDFs will be saved to: {}", set_dir.display());
+    info!("PDFs will be saved to: {}", set_dir.display());
 
     // ディレクトリ作成
     fs::create_dir_all(&set_dir)
@@ -53,10 +54,10 @@ pub async fn create_pdf_set(
 #[tauri::command]
 pub async fn list_pdf_sets(app_handle: AppHandle) -> Result<Vec<PDFSet>, String> {
     let pdfs_dir = get_pdfs_base_dir(&app_handle)?;
-    println!("PDFs directory: {}", pdfs_dir.display());
+    info!("PDFs directory: {}", pdfs_dir.display());
 
     if !pdfs_dir.exists() {
-        println!("PDFs directory does not exist, returning empty list");
+        info!("PDFs directory does not exist, returning empty list");
         return Ok(Vec::new());
     }
 
@@ -65,14 +66,14 @@ pub async fn list_pdf_sets(app_handle: AppHandle) -> Result<Vec<PDFSet>, String>
     let entries = fs::read_dir(&pdfs_dir)
         .map_err(|e| {
             let msg = format!("Failed to read pdfs directory {}: {}", pdfs_dir.display(), e);
-            eprintln!("{}", msg);
+            error!("{}", msg);
             msg
         })?;
 
     for entry in entries {
         let entry = entry.map_err(|e| {
             let msg = format!("Failed to read entry: {}", e);
-            eprintln!("{}", msg);
+            error!("{}", msg);
             msg
         })?;
         let path = entry.path();
@@ -80,45 +81,45 @@ pub async fn list_pdf_sets(app_handle: AppHandle) -> Result<Vec<PDFSet>, String>
         // 隠しファイル（.DS_Storeなど）をスキップ
         if let Some(file_name) = path.file_name() {
             if file_name.to_string_lossy().starts_with('.') {
-                println!("Skipping hidden file: {}", path.display());
+                debug!("Skipping hidden file: {}", path.display());
                 continue;
             }
         }
 
-        println!("Processing entry: {}", path.display());
+        debug!("Processing entry: {}", path.display());
 
         if path.is_dir() {
             // メタデータファイルを読み込む
             let metadata_path = path.join("metadata.json");
-            println!("Looking for metadata at: {}", metadata_path.display());
+            debug!("Looking for metadata at: {}", metadata_path.display());
 
             if metadata_path.exists() {
                 // metadata.jsonから読み込み
                 let json = fs::read_to_string(&metadata_path)
                     .map_err(|e| {
                         let msg = format!("Failed to read metadata at {}: {}", metadata_path.display(), e);
-                        eprintln!("{}", msg);
+                        error!("{}", msg);
                         msg
                     })?;
 
-                println!("Metadata JSON: {}", json);
+                debug!("Metadata JSON: {}", json);
 
                 let set: PDFSet = serde_json::from_str(&json)
                     .map_err(|e| {
                         let msg = format!("Failed to parse metadata at {}: {}", metadata_path.display(), e);
-                        eprintln!("{}", msg);
+                        error!("{}", msg);
                         msg
                     })?;
 
-                println!("Successfully parsed PDFSet: {} ({})", set.name, set.id);
+                info!("Successfully parsed PDFSet: {} ({})", set.name, set.id);
                 sets.push(set);
             } else {
-                println!("Metadata file does not exist at: {}", metadata_path.display());
+                debug!("Metadata file does not exist at: {}", metadata_path.display());
             }
         }
     }
 
-    println!("Returning {} PDF sets", sets.len());
+    info!("Returning {} PDF sets", sets.len());
     Ok(sets)
 }
 
@@ -148,7 +149,7 @@ pub async fn update_pdf_set(app_handle: AppHandle, id: String, name: String) -> 
     fs::write(&metadata_path, updated_json)
         .map_err(|e| format!("Failed to write metadata: {}", e))?;
 
-    println!("Updated PDF set: {} ({})", set.name, set.id);
+    info!("Updated PDF set: {} ({})", set.name, set.id);
     Ok(set)
 }
 
