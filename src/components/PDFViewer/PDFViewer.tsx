@@ -26,6 +26,12 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
   const handleScrollOriginal = useCallback((ratio: number) => {
     const sourceLabel = '原文'
 
+    logger.info('PDFViewer', `📥 ${sourceLabel}から受信`, {
+      受信比率: ratio,
+      現在比率: scrollRatio,
+      差分: Math.abs(ratio - scrollRatio),
+    })
+
     logger.debug('PDFViewer', 'handleScroll呼び出し', {
       送信元: sourceLabel,
       受信比率: ratio.toFixed(4),
@@ -36,15 +42,15 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
 
     // 既存のrequestAnimationFrameをキャンセル
     if (rafIdRef.current !== null) {
-      logger.debug('PDFViewer', '保留中のRAFをキャンセル')
+      logger.info('PDFViewer', '❌ 保留中のRAFをキャンセル')
       cancelAnimationFrame(rafIdRef.current)
     }
 
     // requestAnimationFrameを使ってスムーズに更新
     rafIdRef.current = requestAnimationFrame(() => {
-      logger.debug('PDFViewer', 'RAF実行', {
+      logger.info('PDFViewer', '🎬 RAF実行', {
+        scrollRatio: ratio,
         送信元: sourceLabel,
-        新比率: ratio.toFixed(4),
       })
       scrollSourceRef.current = sourceLabel
       setScrollRatio(ratio)
@@ -55,6 +61,12 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
   const handleScrollTranslated = useCallback((ratio: number) => {
     const sourceLabel = '翻訳'
 
+    logger.info('PDFViewer', `📥 ${sourceLabel}から受信`, {
+      受信比率: ratio,
+      現在比率: scrollRatio,
+      差分: Math.abs(ratio - scrollRatio),
+    })
+
     logger.debug('PDFViewer', 'handleScroll呼び出し', {
       送信元: sourceLabel,
       受信比率: ratio.toFixed(4),
@@ -65,15 +77,15 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
 
     // 既存のrequestAnimationFrameをキャンセル
     if (rafIdRef.current !== null) {
-      logger.debug('PDFViewer', '保留中のRAFをキャンセル')
+      logger.info('PDFViewer', '❌ 保留中のRAFをキャンセル')
       cancelAnimationFrame(rafIdRef.current)
     }
 
     // requestAnimationFrameを使ってスムーズに更新
     rafIdRef.current = requestAnimationFrame(() => {
-      logger.debug('PDFViewer', 'RAF実行', {
+      logger.info('PDFViewer', '🎬 RAF実行', {
+        scrollRatio: ratio,
         送信元: sourceLabel,
-        新比率: ratio.toFixed(4),
       })
       scrollSourceRef.current = sourceLabel
       setScrollRatio(ratio)

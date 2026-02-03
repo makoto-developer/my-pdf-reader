@@ -22,11 +22,50 @@ function calculatePageNumber(scrollTop: number, scrollHeight: number, totalPages
   return Math.floor(ratio * totalPages)
 }
 
-// ページ番号からスクロール位置を計算する関数
-function calculateScrollTopFromPage(pageNumber: number, scrollHeight: number, totalPages: number): number {
+// ページ番号からスクロール位置を計算する関数（改善2: 実際のページ高さを使用）
+// DOM要素のgap/paddingを考慮して正確な位置を計算
+// 注: 現在は使用されていないが、将来的にページベースの同期を再実装する際に使用
+function calculateScrollTopFromPage(
+  pageNumber: number,
+  container: HTMLDivElement,
+  totalPages: number,
+  pageHeights: number[] = []
+): number {
   if (totalPages === 0) return 0
-  const ratio = pageNumber / totalPages
-  return ratio * scrollHeight
+
+  // Tailwind CSS の gap-4 = 16px, py-4 = 16px (上) + 16px (下)
+  const GAP_SIZE = 16 // gap-4
+  const PADDING_TOP = 16 // py-4 の上側
+
+  const maxScroll = container.scrollHeight - container.clientHeight
+
+  // 実際のページ高さが記録されている場合は累積高さを使用
+  if (pageHeights.length > 0 && pageHeights[0] !== undefined) {
+    let cumulativeHeight = PADDING_TOP
+
+    // 目標ページまでの累積高さを計算
+    for (let i = 0; i < pageNumber && i < pageHeights.length; i++) {
+      const height = pageHeights[i] || pageHeights[0]
+      cumulativeHeight += height + GAP_SIZE
+    }
+
+    // 記録されていないページは最初のページの高さで推定
+    if (pageNumber >= pageHeights.length) {
+      const estimatedHeight = pageHeights[0]
+      const remainingPages = pageNumber - pageHeights.length
+      cumulativeHeight += remainingPages * (estimatedHeight + GAP_SIZE)
+    }
+
+    return Math.min(Math.max(0, cumulativeHeight), maxScroll)
+  }
+
+  // フォールバック: 平均ページ高さを使用（従来の方法）
+  const scrollableHeight = maxScroll
+  const gapTotal = GAP_SIZE * (totalPages - 1)
+  const pageHeight = Math.max(0, (scrollableHeight - gapTotal - PADDING_TOP) / totalPages)
+  const targetScrollTop = PADDING_TOP + (pageHeight * pageNumber) + (GAP_SIZE * pageNumber)
+
+  return Math.min(Math.max(0, targetScrollTop), maxScroll)
 }
 
 export function PDFPanel({
@@ -44,9 +83,17 @@ export function PDFPanel({
   const [pdfDocument, setPdfDocument] = useState<pdfjsLib.PDFDocumentProxy | null>(null)
   const isScrollingProgrammatically = useRef(false)
   const renderedPagesRef = useRef<Set<number>>(new Set())
-  const lastUserScrollRatioRef = useRef<number>(0)
+  const lastUserScrollRatioRef = useRef<number>(-1) // -1で初期化（0と区別するため）
   const scrollDebounceTimerRef = useRef<number | null>(null)
-  const SCROLL_THRESHOLD = 0.005 // スクロール差分の閾値（0.5%）
+  const hasInitialSyncRef = useRef(false) // 初回同期フラグ
+
+  // 仮想スクロール用の状態
+  const [visiblePages, setVisiblePages] = useState<{ start: number; end: number }>({ start: 0, end: 10 })
+  const pageHeightsRef = useRef<number[]>([]) // 各ページの高さを記録
+  const RENDER_BUFFER = 5 // 表示範囲の前後にレンダリングするページ数
+
+  // 改善3: 動的閾値（ページ数に応じて調整）
+  const SCROLL_THRESHOLD = totalPages > 0 ? Math.max(0.001, 1.0 / totalPages) : 0.005
 
   // PDFを読み込む
   useEffect(() => {
@@ -62,8 +109,30 @@ export function PDFPanel({
         const pdf = await loadingTask.promise
         setPdfDocument(pdf)
         setTotalPages(pdf.numPages)
+
+        // 最初のページの高さを取得（仮想スクロール用の推定値として使用）
+        const firstPage = await pdf.getPage(1)
+        const viewport = firstPage.getViewport({ scale: 1.5 })
+        pageHeightsRef.current[0] = viewport.height
+
+        // 初期表示範囲を設定
+        setVisiblePages({
+          start: 0,
+          end: Math.min(RENDER_BUFFER, pdf.numPages - 1),
+        })
+
         setIsLoading(false)
         console.log('PDF loaded successfully:', pdf.numPages, 'pages')
+
+        // 動的閾値を計算してログ
+        const dynamicThreshold = Math.max(0.001, 1.0 / pdf.numPages)
+        logger.info(title, 'PDF読み込み完了（仮想スクロール + 改善版）', {
+          totalPages: pdf.numPages,
+          estimatedPageHeight: viewport.height,
+          dynamicThreshold: dynamicThreshold.toFixed(4),
+          thresholdPercentage: (dynamicThreshold * 100).toFixed(2) + '%',
+          initialVisibleRange: `${0} - ${Math.min(RENDER_BUFFER, pdf.numPages - 1)}`,
+        })
       } catch (err) {
         console.error('Error loading PDF:', err)
         setError(`PDFの読み込みに失敗しました: ${err instanceof Error ? err.message : String(err)}`)
@@ -72,20 +141,25 @@ export function PDFPanel({
     }
 
     loadPDF()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdfPath])
 
   // スクロール比率を同期
   useEffect(() => {
+    logger.info(title, '=== スクロール同期 useEffect 開始 ===', {
+      scrollRatio,
+      totalPages,
+    })
+
     if (!scrollContainerRef.current) {
-      logger.debug(title, 'スクロール同期: コンテナ未準備')
+      logger.info(title, '❌ コンテナ未準備')
       return
     }
 
     const container = scrollContainerRef.current
     const maxScroll = container.scrollHeight - container.clientHeight
 
-    // スクロールコンテナの詳細情報をログ
-    logger.debug(title, 'スクロールコンテナ情報', {
+    logger.info(title, 'コンテナ情報', {
       scrollHeight: container.scrollHeight,
       clientHeight: container.clientHeight,
       maxScroll,
@@ -93,36 +167,57 @@ export function PDFPanel({
     })
 
     if (maxScroll <= 0) {
-      logger.debug(title, 'スクロール同期: maxScroll <= 0')
+      logger.info(title, '❌ maxScroll <= 0 (スクロール不可)')
       return
     }
 
     const diff = Math.abs(scrollRatio - lastUserScrollRatioRef.current)
+    const isInitialSync = !hasInitialSyncRef.current && scrollRatio === 0
 
+    logger.info(title, '差分チェック', {
+      受信比率: scrollRatio,
+      前回比率: lastUserScrollRatioRef.current,
+      差分: diff,
+      閾値: SCROLL_THRESHOLD,
+      初回同期: isInitialSync,
+      スキップ判定: !isInitialSync && diff < SCROLL_THRESHOLD,
+    })
+
+    // 初回同期ではない場合、差分チェック
     // 親から受け取ったスクロール比率が、自分が最後に送信した比率と同じ場合はスキップ
     // （無限ループ防止）
-    if (diff < SCROLL_THRESHOLD) {
-      logger.debug(title, 'スクロール同期: スキップ（差分小）', {
+    if (!isInitialSync && diff < SCROLL_THRESHOLD) {
+      logger.info(title, '⏭️ スキップ（差分が閾値未満）', {
         差分: diff.toFixed(4),
         閾値: SCROLL_THRESHOLD.toFixed(4),
       })
       return
     }
 
+    if (isInitialSync) {
+      logger.info(title, '✅ 初回同期を実行')
+      hasInitialSyncRef.current = true
+    }
+
     // プログラムによるスクロールフラグを立てる
     isScrollingProgrammatically.current = true
+    logger.info(title, '🚩 プログラムスクロールフラグ: true')
 
-    // ページ番号ベースの同期：比率からページ番号を推定
-    const estimatedPage = Math.floor(scrollRatio * totalPages)
-
-    // 自分のPDFの高さに合わせてスクロール位置を計算
-    const targetScrollTop = calculateScrollTopFromPage(estimatedPage, container.scrollHeight, totalPages)
+    // 比率ベースの同期：scrollRatioを直接使用してスクロール位置を計算
+    const targetScrollTop = scrollRatio * maxScroll
     const beforeScrollTop = container.scrollTop
 
-    logger.info(title, 'スクロール同期実行（ページベース）', {
+    logger.info(title, '📊 スクロール位置計算（改善版 - 比率直接使用）', {
+      受信比率: scrollRatio,
+      maxScroll,
+      targetScrollTop,
+      beforeScrollTop,
+      差分: targetScrollTop - beforeScrollTop,
+    })
+
+    logger.info(title, 'スクロール同期実行（比率ベース）', {
       受信比率: scrollRatio.toFixed(4),
-      推定ページ: estimatedPage,
-      totalPages,
+      maxScroll,
       scrollHeight: container.scrollHeight,
       targetScrollTop: targetScrollTop.toFixed(2),
       beforeScrollTop: beforeScrollTop.toFixed(2),
@@ -130,6 +225,9 @@ export function PDFPanel({
 
     // 同期的にスクロール位置を更新
     container.scrollTop = targetScrollTop
+
+    // 表示ページ範囲を更新（仮想スクロール）
+    updateVisiblePages(targetScrollTop)
 
     // 実際に設定された位置を確認（次のフレームで）
     requestAnimationFrame(() => {
@@ -144,7 +242,7 @@ export function PDFPanel({
         })
       } else {
         logger.debug(title, 'スクロール同期完了', {
-          page: estimatedPage,
+          ratio: scrollRatio.toFixed(4),
           target: targetScrollTop.toFixed(2),
           actual: actualScrollTop.toFixed(2),
         })
@@ -154,30 +252,67 @@ export function PDFPanel({
     // 最後に受信した比率を更新
     lastUserScrollRatioRef.current = scrollRatio
 
-    // フラグを戻す（100ms後に確実にリセット）
-    setTimeout(() => {
-      isScrollingProgrammatically.current = false
-    }, 100)
+    // 改善4: RAF完全同期（タイムアウトではなくフレーム完了時にリセット）
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        isScrollingProgrammatically.current = false
+        logger.debug(title, 'プログラムスクロールフラグリセット')
+      })
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollRatio, totalPages])
+
+  // スクロール位置から表示すべきページ範囲を計算
+  const updateVisiblePages = (scrollTop: number): void => {
+    if (totalPages === 0 || !scrollContainerRef.current) return
+
+    const container = scrollContainerRef.current
+    const currentPage = calculatePageNumber(scrollTop, container.scrollHeight, totalPages)
+
+    // 現在のページ ± RENDER_BUFFER ページを表示
+    const start = Math.max(0, currentPage - RENDER_BUFFER)
+    const end = Math.min(totalPages - 1, currentPage + RENDER_BUFFER)
+
+    // 範囲が変わった場合のみ更新
+    if (start !== visiblePages.start || end !== visiblePages.end) {
+      setVisiblePages({ start, end })
+      logger.debug(title, '表示ページ範囲更新', {
+        currentPage,
+        start,
+        end,
+        totalVisible: end - start + 1,
+      })
+    }
+  }
 
   // スクロールイベントハンドラ
   const handleScroll = (e: React.UIEvent<HTMLDivElement>): void => {
     const target = e.currentTarget
 
+    logger.info(title, '🖱️ handleScroll イベント発火', {
+      scrollTop: target.scrollTop,
+      プログラムスクロール: isScrollingProgrammatically.current,
+    })
+
+    // 表示ページ範囲を更新（仮想スクロール）
+    updateVisiblePages(target.scrollTop)
+
     // プログラムによるスクロールの場合は同期しない
     if (isScrollingProgrammatically.current) {
+      logger.info(title, '⏭️ プログラムスクロールのため無視')
       return
     }
 
     const maxScroll = target.scrollHeight - target.clientHeight
 
     if (maxScroll <= 0) {
+      logger.info(title, '❌ maxScroll <= 0')
       return
     }
 
     // スクロール比率を計算（0-1の範囲）
     const ratio = target.scrollTop / maxScroll
+    logger.info(title, '📐 比率計算', { ratio: ratio.toFixed(4) })
 
     // デバウンス処理：既存のタイマーをクリア
     if (scrollDebounceTimerRef.current !== null) {
@@ -188,9 +323,22 @@ export function PDFPanel({
     scrollDebounceTimerRef.current = window.setTimeout(() => {
       const diff = Math.abs(ratio - lastUserScrollRatioRef.current)
 
+      logger.info(title, '⏱️ デバウンス完了', {
+        比率: ratio,
+        前回比率: lastUserScrollRatioRef.current,
+        差分: diff,
+        閾値: SCROLL_THRESHOLD,
+        送信判定: diff >= SCROLL_THRESHOLD,
+      })
+
       // 差分が閾値以上の場合のみ送信
       if (diff >= SCROLL_THRESHOLD) {
         const currentPage = calculatePageNumber(target.scrollTop, target.scrollHeight, totalPages)
+
+        logger.info(title, '📤 親に送信！', {
+          比率: ratio,
+          ページ: currentPage,
+        })
 
         logger.info(title, 'ユーザースクロール送信', {
           scrollTop: target.scrollTop.toFixed(2),
@@ -209,22 +357,25 @@ export function PDFPanel({
 
         // 親に通知
         onScroll(ratio)
+      } else {
+        logger.info(title, '⏭️ 送信スキップ（差分が閾値未満）')
       }
 
       scrollDebounceTimerRef.current = null
     }, 50)
   }
 
-  // すべてのページをレンダリング
+  // 表示範囲のページをレンダリング（仮想スクロール）
   useEffect(() => {
     if (!pdfDocument || totalPages === 0) return
 
     let isCancelled = false
     const renderTasks: pdfjsLib.RenderTask[] = []
 
-    const renderAllPages = async (): Promise<void> => {
+    const renderVisiblePages = async (): Promise<void> => {
       try {
-        for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+        // 表示範囲のページのみレンダリング
+        for (let pageNum = visiblePages.start + 1; pageNum <= visiblePages.end + 1; pageNum++) {
           if (isCancelled) break
 
           // 既にレンダリング済みのページはスキップ
@@ -243,6 +394,9 @@ export function PDFPanel({
           canvas.height = viewport.height
           canvas.width = viewport.width
 
+          // ページ高さを記録（仮想スクロール用）
+          pageHeightsRef.current[pageNum - 1] = viewport.height
+
           const renderTask = page.render({
             canvasContext: context,
             viewport,
@@ -253,6 +407,11 @@ export function PDFPanel({
           try {
             await renderTask.promise
             renderedPagesRef.current.add(pageNum)
+            logger.debug(title, 'ページレンダリング完了（改善版）', {
+              pageNum,
+              height: viewport.height,
+              totalRecorded: pageHeightsRef.current.filter((h) => h !== undefined).length,
+            })
           } catch (err) {
             // キャンセルエラーは無視
             if (err instanceof Error && err.name === 'RenderingCancelledException') {
@@ -260,26 +419,6 @@ export function PDFPanel({
             } else {
               throw err
             }
-          }
-        }
-
-        // 全ページレンダリング完了後、スクロール位置を確認してリセット
-        if (scrollContainerRef.current) {
-          const container = scrollContainerRef.current
-
-          logger.info(title, 'レンダリング完了時のスクロール情報（リセット前）', {
-            scrollTop: container.scrollTop,
-            scrollHeight: container.scrollHeight,
-            clientHeight: container.clientHeight,
-            maxScroll: container.scrollHeight - container.clientHeight,
-          })
-
-          // スクロール位置を強制的に0にリセット
-          if (container.scrollTop !== 0) {
-            logger.warn(title, 'スクロール位置が0でないためリセット', {
-              before: container.scrollTop,
-            })
-            container.scrollTop = 0
           }
         }
       } catch (err) {
@@ -290,7 +429,7 @@ export function PDFPanel({
       }
     }
 
-    renderAllPages()
+    renderVisiblePages()
 
     return () => {
       isCancelled = true
@@ -299,7 +438,7 @@ export function PDFPanel({
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pdfDocument, totalPages])
+  }, [pdfDocument, totalPages, visiblePages])
 
   if (isLoading) {
     return (
@@ -343,7 +482,31 @@ export function PDFPanel({
           align === 'left' ? 'items-start pl-4' :
           'items-center px-4'
         }`}>
-          {Array.from({ length: totalPages }, (_, index) => (
+          {/* 上部スペーサー（表示範囲外の上部） */}
+          {visiblePages.start > 0 && (
+            <div
+              style={{
+                height: `${(() => {
+                  const GAP_SIZE = 16
+                  let totalHeight = 0
+                  const estimatedHeight = pageHeightsRef.current[0] || 800
+
+                  // 実際のページ高さを累積
+                  for (let i = 0; i < visiblePages.start; i++) {
+                    totalHeight += (pageHeightsRef.current[i] || estimatedHeight) + GAP_SIZE
+                  }
+
+                  return totalHeight
+                })()}px`,
+              }}
+            />
+          )}
+
+          {/* 表示範囲のページをレンダリング */}
+          {Array.from(
+            { length: visiblePages.end - visiblePages.start + 1 },
+            (_, i) => visiblePages.start + i
+          ).map((index) => (
             <canvas
               key={index}
               ref={(el) => {
@@ -352,6 +515,26 @@ export function PDFPanel({
               className="shadow-lg"
             />
           ))}
+
+          {/* 下部スペーサー（表示範囲外の下部） */}
+          {visiblePages.end < totalPages - 1 && (
+            <div
+              style={{
+                height: `${(() => {
+                  const GAP_SIZE = 16
+                  let totalHeight = 0
+                  const estimatedHeight = pageHeightsRef.current[0] || 800
+
+                  // 実際のページ高さを累積
+                  for (let i = visiblePages.end + 1; i < totalPages; i++) {
+                    totalHeight += (pageHeightsRef.current[i] || estimatedHeight) + GAP_SIZE
+                  }
+
+                  return totalHeight
+                })()}px`,
+              }}
+            />
+          )}
         </div>
       </div>
     </div>
