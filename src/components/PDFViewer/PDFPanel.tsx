@@ -425,6 +425,29 @@ export function PDFPanel({
     }, 50)
   }
 
+  // トラックパッドでのピンチズーム対応
+  const handleWheel = (e: React.WheelEvent<HTMLDivElement>): void => {
+    // Ctrl + ホイール = ピンチズーム
+    if (e.ctrlKey) {
+      e.preventDefault()
+
+      if (!scale) return
+
+      // deltaYが負の値 = 拡大、正の値 = 縮小
+      const zoomDelta = -e.deltaY * 0.01
+      const newScale = Math.max(0.3, Math.min(2.5, scale + zoomDelta))
+
+      setScale(newScale)
+
+      logger.info(title, '🔍 ピンチズーム', {
+        deltaY: e.deltaY,
+        zoomDelta: zoomDelta.toFixed(3),
+        oldScale: scale.toFixed(3),
+        newScale: newScale.toFixed(3),
+      })
+    }
+  }
+
   // スケールが変更された時はレンダリング済みフラグをクリア
   useEffect(() => {
     renderedPagesRef.current.clear()
@@ -536,6 +559,11 @@ export function PDFPanel({
           <span className="text-sm text-gray-600">
             {totalPages} ページ
           </span>
+          {scale && (
+            <span className="text-xs text-gray-500">
+              • {Math.round(scale * 100)}%
+            </span>
+          )}
         </div>
       </div>
 
@@ -543,6 +571,7 @@ export function PDFPanel({
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
+        onWheel={handleWheel}
         className="flex-1 overflow-auto"
       >
         <div className={`flex flex-col gap-4 py-4 ${
