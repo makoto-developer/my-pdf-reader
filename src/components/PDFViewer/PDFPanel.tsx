@@ -81,11 +81,14 @@ export function PDFPanel({
   const [error, setError] = useState<string | null>(null)
   const [totalPages, setTotalPages] = useState(0)
   const [pdfDocument, setPdfDocument] = useState<pdfjsLib.PDFDocumentProxy | null>(null)
+  const [scale, setScale] = useState<number | undefined>(undefined) // PDFの表示スケール（自動計算）
   const isScrollingProgrammatically = useRef(false)
   const renderedPagesRef = useRef<Set<number>>(new Set())
   const lastUserScrollRatioRef = useRef<number>(-1) // -1で初期化（0と区別するため）
+  const lastUserScrollTopRef = useRef<number>(0) // ピクセル単位の最後のスクロール位置
   const scrollDebounceTimerRef = useRef<number | null>(null)
   const hasInitialSyncRef = useRef(false) // 初回同期フラグ
+  const PIXEL_THRESHOLD = 50 // ピクセル単位の閾値（50px以上移動で送信）
 
   // 仮想スクロール用の状態
   const [visiblePages, setVisiblePages] = useState<{ start: number; end: number }>({ start: 0, end: 10 })
@@ -93,7 +96,12 @@ export function PDFPanel({
   const RENDER_BUFFER = 5 // 表示範囲の前後にレンダリングするページ数
 
   // 改善3: 動的閾値（ページ数に応じて調整）
-  const SCROLL_THRESHOLD = totalPages > 0 ? Math.max(0.001, 1.0 / totalPages) : 0.005
+  // より小さい閾値にしてページ内のスクロールも検出できるようにする
+  const SCROLL_THRESHOLD = totalPages > 0 ? Math.max(0.0001, 0.2 / totalPages) : 0.0005
+
+  // 例: 900ページの場合
+  // 0.2 / 900 = 0.00022 (0.022% = 約1/5ページ分)
+  // これならページ内でも検出される
 
   // PDFを読み込む
   useEffect(() => {
@@ -110,9 +118,53 @@ export function PDFPanel({
         setPdfDocument(pdf)
         setTotalPages(pdf.numPages)
 
-        // 最初のページの高さを取得（仮想スクロール用の推定値として使用）
+        // 最初のページの幅を取得してスケールを計算
         const firstPage = await pdf.getPage(1)
-        const viewport = firstPage.getViewport({ scale: 1.5 })
+        const initialViewport = firstPage.getViewport({ scale: 1.0 })
+
+        // isLoadingをfalseにしてDOMをレンダリング
+        setIsLoading(false)
+
+        // DOMが完全にレンダリングされるまで待つ
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+
+        // コンテナの幅を取得
+        const container = scrollContainerRef.current
+        if (!container) {
+          logger.warn(title, 'コンテナが見つかりません。スケール計算をスキップします。')
+          // デフォルトスケールを設定
+          setScale(1.0)
+          return
+        }
+
+        // 実際に使用可能な幅を計算
+        // alignに応じてパディングを計算
+        // - align='right': pr-4 (右側のみ 16px)
+        // - align='left': pl-4 (左側のみ 16px)
+        // - align='center': px-4 (両側 32px)
+        const PADDING = align === 'center' ? 32 : 16
+        const containerWidth = container.clientWidth
+        const availableWidth = containerWidth - PADDING
+
+        // PDFの幅に合わせてスケールを計算
+        const calculatedScale = availableWidth / initialViewport.width
+
+        // スケールを設定（最小0.3、最大2.5）
+        const finalScale = Math.max(0.3, Math.min(2.5, calculatedScale))
+        setScale(finalScale)
+
+        logger.info(title, '🔍 スケール自動計算完了', {
+          containerWidth,
+          PADDING,
+          availableWidth,
+          pdfWidth: initialViewport.width,
+          calculatedScale: calculatedScale.toFixed(3),
+          finalScale: finalScale.toFixed(3),
+          PDFがコンテナに収まる: finalScale === calculatedScale,
+        })
+
+        // 計算したスケールでビューポートを再取得
+        const viewport = firstPage.getViewport({ scale: finalScale })
         pageHeightsRef.current[0] = viewport.height
 
         // 初期表示範囲を設定
@@ -121,7 +173,6 @@ export function PDFPanel({
           end: Math.min(RENDER_BUFFER, pdf.numPages - 1),
         })
 
-        setIsLoading(false)
         console.log('PDF loaded successfully:', pdf.numPages, 'pages')
 
         // 動的閾値を計算してログ
@@ -322,17 +373,25 @@ export function PDFPanel({
     // 50ms後にスクロール比率を送信
     scrollDebounceTimerRef.current = window.setTimeout(() => {
       const diff = Math.abs(ratio - lastUserScrollRatioRef.current)
+      const pixelDiff = Math.abs(target.scrollTop - lastUserScrollTopRef.current)
+
+      // 比率ベースまたはピクセルベースのいずれかで閾値を超えていれば送信
+      const shouldSend = diff >= SCROLL_THRESHOLD || pixelDiff >= PIXEL_THRESHOLD
 
       logger.info(title, '⏱️ デバウンス完了', {
         比率: ratio,
         前回比率: lastUserScrollRatioRef.current,
-        差分: diff,
-        閾値: SCROLL_THRESHOLD,
-        送信判定: diff >= SCROLL_THRESHOLD,
+        比率差分: diff,
+        比率閾値: SCROLL_THRESHOLD,
+        scrollTop: target.scrollTop,
+        前回scrollTop: lastUserScrollTopRef.current,
+        ピクセル差分: pixelDiff,
+        ピクセル閾値: PIXEL_THRESHOLD,
+        送信判定: shouldSend,
       })
 
       // 差分が閾値以上の場合のみ送信
-      if (diff >= SCROLL_THRESHOLD) {
+      if (shouldSend) {
         const currentPage = calculatePageNumber(target.scrollTop, target.scrollHeight, totalPages)
 
         logger.info(title, '📤 親に送信！', {
@@ -352,8 +411,9 @@ export function PDFPanel({
           差分: diff.toFixed(4),
         })
 
-        // 最後に送信した比率を記録
+        // 最後に送信した比率とスクロール位置を記録
         lastUserScrollRatioRef.current = ratio
+        lastUserScrollTopRef.current = target.scrollTop
 
         // 親に通知
         onScroll(ratio)
@@ -365,9 +425,16 @@ export function PDFPanel({
     }, 50)
   }
 
+  // スケールが変更された時はレンダリング済みフラグをクリア
+  useEffect(() => {
+    renderedPagesRef.current.clear()
+  }, [scale])
+
   // 表示範囲のページをレンダリング（仮想スクロール）
   useEffect(() => {
     if (!pdfDocument || totalPages === 0) return
+    // スケールが未定義の場合はレンダリングしない（スケール計算中）
+    if (scale === undefined) return
 
     let isCancelled = false
     const renderTasks: pdfjsLib.RenderTask[] = []
@@ -390,7 +457,8 @@ export function PDFPanel({
           const context = canvas.getContext('2d')
           if (!context) continue
 
-          const viewport = page.getViewport({ scale: 1.5 })
+          // 自動計算されたスケールを使用
+          const viewport = page.getViewport({ scale })
           canvas.height = viewport.height
           canvas.width = viewport.width
 
@@ -438,7 +506,7 @@ export function PDFPanel({
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pdfDocument, totalPages, visiblePages])
+  }, [pdfDocument, totalPages, visiblePages, scale])
 
   if (isLoading) {
     return (
