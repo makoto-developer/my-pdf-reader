@@ -12,6 +12,8 @@ interface PDFPanelProps {
   scrollRatio: number
   onScroll: (ratio: number) => void
   align: 'left' | 'right' | 'center'
+  scale?: number
+  onScaleChange: (scale: number) => void
 }
 
 // ページ番号を計算する関数
@@ -74,6 +76,8 @@ export function PDFPanel({
   scrollRatio,
   onScroll,
   align,
+  scale: externalScale,
+  onScaleChange,
 }: PDFPanelProps): React.ReactElement {
   const canvasRefs = useRef<(HTMLCanvasElement | null)[]>([])
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -81,7 +85,8 @@ export function PDFPanel({
   const [error, setError] = useState<string | null>(null)
   const [totalPages, setTotalPages] = useState(0)
   const [pdfDocument, setPdfDocument] = useState<pdfjsLib.PDFDocumentProxy | null>(null)
-  const [scale, setScale] = useState<number | undefined>(undefined) // PDFの表示スケール（自動計算）
+  // 親から渡されたscaleを使用
+  const scale = externalScale
   const isScrollingProgrammatically = useRef(false)
   const renderedPagesRef = useRef<Set<number>>(new Set())
   const lastUserScrollRatioRef = useRef<number>(-1) // -1で初期化（0と区別するため）
@@ -133,7 +138,7 @@ export function PDFPanel({
         if (!container) {
           logger.warn(title, 'コンテナが見つかりません。スケール計算をスキップします。')
           // デフォルトスケールを設定
-          setScale(1.0)
+          onScaleChange(1.0)
           return
         }
 
@@ -151,7 +156,7 @@ export function PDFPanel({
 
         // スケールを設定（最小0.3、最大2.5）
         const finalScale = Math.max(0.3, Math.min(2.5, calculatedScale))
-        setScale(finalScale)
+        onScaleChange(finalScale)
 
         logger.info(title, '🔍 スケール自動計算完了', {
           containerWidth,
@@ -437,7 +442,7 @@ export function PDFPanel({
       const zoomDelta = -e.deltaY * 0.01
       const newScale = Math.max(0.3, Math.min(2.5, scale + zoomDelta))
 
-      setScale(newScale)
+      onScaleChange(newScale)
 
       logger.info(title, '🔍 ピンチズーム', {
         deltaY: e.deltaY,

@@ -3,6 +3,8 @@ import type { PDFSet } from '@/domain/PDFSet'
 import { PDFPanel } from './PDFPanel'
 import { Button } from '../common/Button'
 import { logger } from '@/utils/logger'
+import { getCurrentWindow, currentMonitor } from '@tauri-apps/api/window'
+import { LogicalSize } from '@tauri-apps/api/dpi'
 
 interface PDFViewerProps {
   pdfSet: PDFSet
@@ -12,8 +14,11 @@ interface PDFViewerProps {
 export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElement {
   const [centerAlign, setCenterAlign] = useState(true)
   const [scrollRatio, setScrollRatio] = useState(0)
+  const [scale, setScale] = useState<number | undefined>(undefined)
+  const [autoResize, setAutoResize] = useState(false)
   const rafIdRef = useRef<number | null>(null)
   const scrollSourceRef = useRef<string>('')
+  const mainContainerRef = useRef<HTMLDivElement>(null)
 
   // scrollRatioの変更を監視
   useEffect(() => {
@@ -22,6 +27,63 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
       更新元: scrollSourceRef.current,
     })
   }, [scrollRatio])
+
+  // scaleの変更を監視
+  useEffect(() => {
+    if (scale !== undefined) {
+      logger.info('PDFViewer', 'scale更新', {
+        スケール: scale.toFixed(3),
+        パーセント: `${Math.round(scale * 100)}%`,
+      })
+    }
+  }, [scale])
+
+  // ウィンドウリサイズを監視して自動リサイズ
+  useEffect(() => {
+    if (!autoResize) return
+
+    const handleResize = (): void => {
+      // PDFの基本幅
+      const PDF_BASE_WIDTH = 531
+
+      // メインコンテナの幅を取得
+      const mainContainer = mainContainerRef.current
+      if (!mainContainer) {
+        logger.warn('PDFViewer', 'メインコンテナが見つかりません')
+        return
+      }
+
+      // 左右のパネル幅 (mainコンテナの幅の半分)
+      const panelWidth = mainContainer.clientWidth / 2
+
+      // パディング (align='right'または'left'の場合は16px)
+      const PADDING = centerAlign ? 16 : 32
+      const availableWidth = panelWidth - PADDING - 10 // 境界線とマージンを考慮
+
+      // 新しいスケールを計算
+      const newScale = availableWidth / PDF_BASE_WIDTH
+      const finalScale = Math.max(0.3, Math.min(2.5, newScale))
+
+      logger.info('PDFViewer', '🔄 自動リサイズ', {
+        panelWidth,
+        availableWidth,
+        calculatedScale: newScale.toFixed(3),
+        finalScale: finalScale.toFixed(3),
+      })
+
+      setScale(finalScale)
+    }
+
+    // リサイズイベントを監視
+    window.addEventListener('resize', handleResize)
+
+    // 初回実行
+    handleResize()
+
+    return () => {
+      window.removeEventListener('resize', handleResize)
+    }
+  }, [autoResize, centerAlign])
 
   const handleScrollOriginal = useCallback((ratio: number) => {
     const sourceLabel = '原文'
@@ -93,6 +155,68 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
     })
   }, [scrollRatio])
 
+  // PDFの横幅に合わせてウィンドウサイズを調整
+  const handleFitToContent = async (): Promise<void> => {
+    if (!scale) {
+      logger.warn('PDFViewer', 'スケールが未設定のため、ウィンドウサイズ調整をスキップ')
+      return
+    }
+
+    try {
+      const window = getCurrentWindow()
+      const monitor = await currentMonitor()
+
+      if (!monitor) {
+        logger.error('PDFViewer', 'モニター情報の取得に失敗')
+        return
+      }
+
+      // PDFの基本幅 (PDF.jsで取得した幅)
+      const PDF_BASE_WIDTH = 531
+
+      // 必要な幅を計算
+      // - PDF幅 * scale * 2 (左右のパネル)
+      // - + パディング (左右16px * 2 = 32px * 2パネル = 64px)
+      // - + 中央の境界線 (2px)
+      // - + ヘッダー/その他のマージン (約40px)
+      const pdfWidth = PDF_BASE_WIDTH * scale
+      const totalPadding = 64 // 左右のパディング
+      const border = 2 // 中央の境界線
+      const margin = 40 // その他のマージン
+      const requiredWidth = Math.ceil(pdfWidth * 2 + totalPadding + border + margin)
+
+      // モニターの作業領域を取得 (タスクバー等を除いた領域)
+      const maxWidth = monitor.size.width
+      const maxHeight = monitor.size.height
+
+      // ディスプレイをはみ出さないように調整
+      const finalWidth = Math.min(requiredWidth, maxWidth - 20) // 左右10pxずつマージン
+      
+      // 高さは現在の高さを維持 (または最大高さに制限)
+      const currentSize = await window.outerSize()
+      const finalHeight = Math.min(currentSize.height, maxHeight - 40) // 上下20pxずつマージン
+
+      logger.info('PDFViewer', 'ウィンドウサイズ調整', {
+        scale: scale.toFixed(3),
+        pdfWidth: pdfWidth.toFixed(0),
+        requiredWidth,
+        maxWidth,
+        finalWidth,
+        currentHeight: currentSize.height,
+        finalHeight,
+      })
+
+      // ウィンドウサイズを設定
+      await window.setSize(new LogicalSize(finalWidth, finalHeight))
+
+      logger.info('PDFViewer', 'ウィンドウサイズ調整完了')
+    } catch (error) {
+      logger.error('PDFViewer', 'ウィンドウサイズ調整エラー', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
   return (
     <div className="h-screen flex flex-col bg-gray-100">
       {/* ヘッダー */}
@@ -102,7 +226,22 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
             ← 戻る
           </Button>
           <h1 className="text-2xl font-bold text-gray-900">{pdfSet.name}</h1>
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              onClick={handleFitToContent}
+              variant="secondary"
+              size="sm"
+              disabled={!scale}
+            >
+              📐 ウィンドウを調整
+            </Button>
+            <Button
+              onClick={() => setAutoResize(!autoResize)}
+              variant={autoResize ? 'primary' : 'secondary'}
+              size="sm"
+            >
+              {autoResize ? '🔄 自動リサイズ: ON' : '🔄 自動リサイズ: OFF'}
+            </Button>
             <Button
               onClick={() => setCenterAlign(!centerAlign)}
               variant={centerAlign ? 'primary' : 'secondary'}
@@ -115,7 +254,7 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
       </header>
 
       {/* PDF表示エリア（左右分割） */}
-      <main className="flex-1 flex overflow-hidden">
+      <main ref={mainContainerRef} className="flex-1 flex overflow-hidden">
         <div className="w-1/2 border-r-2 border-gray-400">
           <PDFPanel
             pdfPath={pdfSet.originalPdfPath}
@@ -123,6 +262,8 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
             scrollRatio={scrollRatio}
             onScroll={handleScrollOriginal}
             align={centerAlign ? 'right' : 'center'}
+            scale={scale}
+            onScaleChange={setScale}
           />
         </div>
         <div className="w-1/2">
@@ -132,6 +273,8 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
             scrollRatio={scrollRatio}
             onScroll={handleScrollTranslated}
             align={centerAlign ? 'left' : 'center'}
+            scale={scale}
+            onScaleChange={setScale}
           />
         </div>
       </main>
