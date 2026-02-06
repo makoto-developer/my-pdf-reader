@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import * as pdfjsLib from 'pdfjs-dist'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { logger } from '@/utils/logger'
@@ -14,6 +14,8 @@ interface PDFPanelProps {
   align: 'left' | 'right' | 'center'
   scale?: number
   onScaleChange: (scale: number) => void
+  marginLeft: number  // 左側の余白
+  marginRight: number  // 右側の余白
 }
 
 // ページ番号を計算する関数
@@ -24,10 +26,11 @@ function calculatePageNumber(scrollTop: number, scrollHeight: number, totalPages
   return Math.floor(ratio * totalPages)
 }
 
+/* 
 // ページ番号からスクロール位置を計算する関数（改善2: 実際のページ高さを使用）
 // DOM要素のgap/paddingを考慮して正確な位置を計算
 // 注: 現在は使用されていないが、将来的にページベースの同期を再実装する際に使用
-function calculateScrollTopFromPage(
+function _calculateScrollTopFromPage(
   pageNumber: number,
   container: HTMLDivElement,
   totalPages: number,
@@ -69,6 +72,7 @@ function calculateScrollTopFromPage(
 
   return Math.min(Math.max(0, targetScrollTop), maxScroll)
 }
+*/
 
 export function PDFPanel({
   pdfPath,
@@ -78,6 +82,8 @@ export function PDFPanel({
   align,
   scale: externalScale,
   onScaleChange,
+  marginLeft,
+  marginRight,
 }: PDFPanelProps): React.ReactElement {
   const canvasRefs = useRef<(HTMLCanvasElement | null)[]>([])
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -556,9 +562,15 @@ export function PDFPanel({
   }
 
   return (
-    <div className="flex flex-col h-full bg-gray-50">
+    <div className="flex flex-col h-full bg-white">
       {/* ヘッダー */}
-      <div className="bg-white border-b px-4 py-2">
+      <div 
+        className="bg-white border-b py-2"
+        style={{
+          paddingRight: align === 'right' ? 0 : 16,
+          paddingLeft: align === 'left' ? 0 : 16,
+        }}
+      >
         <h3 className="text-sm font-medium text-gray-700">{title}</h3>
         <div className="flex items-center gap-2 mt-1">
           <span className="text-sm text-gray-600">
@@ -577,13 +589,23 @@ export function PDFPanel({
         ref={scrollContainerRef}
         onScroll={handleScroll}
         onWheel={handleWheel}
-        className="flex-1 overflow-auto"
+        className="flex-1 overflow-auto relative"
+        style={{
+          clipPath: marginLeft > 0 || marginRight > 0 ? `inset(0 ${marginRight}px 0 ${marginLeft}px)` : undefined,
+        }}
       >
-        <div className={`flex flex-col gap-4 py-4 ${
-          align === 'right' ? 'items-end pr-4' :
-          align === 'left' ? 'items-start pl-4' :
-          'items-center px-4'
-        }`}>
+        <div 
+          className="flex flex-col gap-4 py-4"
+          style={{
+            alignItems: align === 'right' ? 'flex-end' : align === 'left' ? 'flex-start' : 'center',
+            paddingRight: align === 'right' ? 0 : align === 'left' ? 16 : 16,
+            paddingLeft: align === 'left' ? 0 : align === 'right' ? 16 : 16,
+            transform: align === 'right' && marginRight > 0 ? `translateX(-${marginRight}px)` 
+                     : align === 'left' && marginLeft > 0 ? `translateX(${marginLeft}px)` 
+                     : align === 'center' ? `translateX(${(marginLeft - marginRight) / 2}px)` 
+                     : undefined,
+          }}
+        >
           {/* 上部スペーサー（表示範囲外の上部） */}
           {visiblePages.start > 0 && (
             <div
@@ -638,6 +660,8 @@ export function PDFPanel({
             />
           )}
         </div>
+
+
       </div>
     </div>
   )

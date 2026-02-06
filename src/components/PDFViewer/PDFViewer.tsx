@@ -12,13 +12,107 @@ interface PDFViewerProps {
 }
 
 export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElement {
-  const [centerAlign, setCenterAlign] = useState(true)
+  const [centerAlign, setCenterAlign] = useState(false)
   const [scrollRatio, setScrollRatio] = useState(0)
   const [scale, setScale] = useState<number | undefined>(undefined)
   const [autoResize, setAutoResize] = useState(false)
+  
+  // 余白設定
+  const [isMarginEditMode, setIsMarginEditMode] = useState(false)
+  const [leftOuterMargin, setLeftOuterMargin] = useState(0) // 左ペイン外側
+  const [leftInnerMargin, setLeftInnerMargin] = useState(0) // 左ペイン内側
+  const [rightInnerMargin, setRightInnerMargin] = useState(0) // 右ペイン内側
+  const [rightOuterMargin, setRightOuterMargin] = useState(0) // 右ペイン外側
+  const [tempLeftOuterMargin, setTempLeftOuterMargin] = useState(0)
+  const [tempLeftInnerMargin, setTempLeftInnerMargin] = useState(0)
+  const [tempRightInnerMargin, setTempRightInnerMargin] = useState(0)
+  const [tempRightOuterMargin, setTempRightOuterMargin] = useState(0)
+  
   const rafIdRef = useRef<number | null>(null)
   const scrollSourceRef = useRef<string>('')
   const mainContainerRef = useRef<HTMLDivElement>(null)
+
+  // 赤線のドラッグ用
+  const isDraggingLeftOuterRef = useRef(false)
+  const isDraggingLeftInnerRef = useRef(false)
+  const isDraggingRightInnerRef = useRef(false)
+  const isDraggingRightOuterRef = useRef(false)
+  const dragStartXRef = useRef(0)
+  const dragStartLeftOuterRef = useRef(0)
+  const dragStartLeftInnerRef = useRef(0)
+  const dragStartRightInnerRef = useRef(0)
+  const dragStartRightOuterRef = useRef(0)
+
+  // mainContainerの位置情報
+  const [containerRect, setContainerRect] = useState<DOMRect | null>(null)
+
+  // mainContainerの位置を更新
+  useEffect(() => {
+    const updateContainerRect = (): void => {
+      if (mainContainerRef.current) {
+        setContainerRect(mainContainerRef.current.getBoundingClientRect())
+      }
+    }
+
+    // 初回実行
+    updateContainerRect()
+
+    // ウィンドウリサイズ時に更新
+    window.addEventListener('resize', updateContainerRect)
+
+    return () => {
+      window.removeEventListener('resize', updateContainerRect)
+    }
+  }, [])
+
+  // 余白編集モード開始時にもcontainerRectを更新
+  useEffect(() => {
+    if (isMarginEditMode && mainContainerRef.current) {
+      setContainerRect(mainContainerRef.current.getBoundingClientRect())
+    }
+  }, [isMarginEditMode])
+
+  // 余白設定をlocalStorageから読み込み
+  useEffect(() => {
+    const keys = {
+      leftOuter: `pdf-margin-left-outer-${pdfSet.id}`,
+      leftInner: `pdf-margin-left-inner-${pdfSet.id}`,
+      rightInner: `pdf-margin-right-inner-${pdfSet.id}`,
+      rightOuter: `pdf-margin-right-outer-${pdfSet.id}`,
+    }
+    
+    const savedLeftOuter = localStorage.getItem(keys.leftOuter)
+    const savedLeftInner = localStorage.getItem(keys.leftInner)
+    const savedRightInner = localStorage.getItem(keys.rightInner)
+    const savedRightOuter = localStorage.getItem(keys.rightOuter)
+    
+    if (savedLeftOuter) setLeftOuterMargin(parseInt(savedLeftOuter, 10))
+    if (savedLeftInner) setLeftInnerMargin(parseInt(savedLeftInner, 10))
+    if (savedRightInner) setRightInnerMargin(parseInt(savedRightInner, 10))
+    if (savedRightOuter) setRightOuterMargin(parseInt(savedRightOuter, 10))
+    
+    logger.info('PDFViewer', '余白設定を読み込み', {
+      leftOuter: savedLeftOuter || 0,
+      leftInner: savedLeftInner || 0,
+      rightInner: savedRightInner || 0,
+      rightOuter: savedRightOuter || 0,
+    })
+  }, [pdfSet.id])
+
+  // 余白設定をlocalStorageに保存
+  const saveMarginValues = (leftOuter: number, leftInner: number, rightInner: number, rightOuter: number): void => {
+    const keys = {
+      leftOuter: `pdf-margin-left-outer-${pdfSet.id}`,
+      leftInner: `pdf-margin-left-inner-${pdfSet.id}`,
+      rightInner: `pdf-margin-right-inner-${pdfSet.id}`,
+      rightOuter: `pdf-margin-right-outer-${pdfSet.id}`,
+    }
+    localStorage.setItem(keys.leftOuter, leftOuter.toString())
+    localStorage.setItem(keys.leftInner, leftInner.toString())
+    localStorage.setItem(keys.rightInner, rightInner.toString())
+    localStorage.setItem(keys.rightOuter, rightOuter.toString())
+    logger.info('PDFViewer', '余白設定を保存', { leftOuter, leftInner, rightInner, rightOuter })
+  }
 
   // scrollRatioの変更を監視
   useEffect(() => {
@@ -38,6 +132,14 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
     }
   }, [scale])
 
+  // centerAlignの変更を監視（デバッグ用）
+  useEffect(() => {
+    logger.info('PDFViewer', '🎯 centerAlign変更', {
+      centerAlign,
+      スタックトレース: new Error().stack,
+    })
+  }, [centerAlign])
+
   // ウィンドウリサイズを監視して自動リサイズ
   useEffect(() => {
     if (!autoResize) return
@@ -56,9 +158,17 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
       // 左右のパネル幅 (mainコンテナの幅の半分)
       const panelWidth = mainContainer.clientWidth / 2
 
-      // パディング (align='right'または'left'の場合は16px)
-      const PADDING = centerAlign ? 16 : 32
-      const availableWidth = panelWidth - PADDING - 10 // 境界線とマージンを考慮
+      // パディング計算
+      // 中央寄せON: 外側16pxのみ（中央側は0）
+      // 中央寄せOFF: 左右それぞれ16px = 32px
+      let totalPadding: number
+      if (centerAlign) {
+        // 中央寄せ時は、外側のpaddingのみ（16px）
+        totalPadding = 16
+      } else {
+        totalPadding = 32
+      }
+      const availableWidth = panelWidth - totalPadding - 10 // 境界線とマージンを考慮
 
       // 新しいスケールを計算
       const newScale = availableWidth / PDF_BASE_WIDTH
@@ -83,7 +193,7 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
     return () => {
       window.removeEventListener('resize', handleResize)
     }
-  }, [autoResize, centerAlign])
+  }, [autoResize, centerAlign, leftInnerMargin, rightInnerMargin])
 
   const handleScrollOriginal = useCallback((ratio: number) => {
     const sourceLabel = '原文'
@@ -217,6 +327,126 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
     }
   }
 
+  // 余白編集モードを開始
+  const handleStartMarginEdit = (): void => {
+    setTempLeftOuterMargin(leftOuterMargin)
+    setTempLeftInnerMargin(leftInnerMargin)
+    setTempRightInnerMargin(rightInnerMargin)
+    setTempRightOuterMargin(rightOuterMargin)
+    setIsMarginEditMode(true)
+    logger.info('PDFViewer', '余白編集モード開始', { leftOuterMargin, leftInnerMargin, rightInnerMargin, rightOuterMargin })
+  }
+
+  // 余白設定を確定
+  const handleConfirmMargin = (): void => {
+    setLeftOuterMargin(tempLeftOuterMargin)
+    setLeftInnerMargin(tempLeftInnerMargin)
+    setRightInnerMargin(tempRightInnerMargin)
+    setRightOuterMargin(tempRightOuterMargin)
+    saveMarginValues(tempLeftOuterMargin, tempLeftInnerMargin, tempRightInnerMargin, tempRightOuterMargin)
+    setIsMarginEditMode(false)
+    logger.info('PDFViewer', '余白設定を確定', { 
+      leftOuter: tempLeftOuterMargin, 
+      leftInner: tempLeftInnerMargin, 
+      rightInner: tempRightInnerMargin, 
+      rightOuter: tempRightOuterMargin 
+    })
+  }
+
+  // 余白編集をキャンセル
+  const handleCancelMarginEdit = (): void => {
+    setTempLeftOuterMargin(leftOuterMargin)
+    setTempLeftInnerMargin(leftInnerMargin)
+    setTempRightInnerMargin(rightInnerMargin)
+    setTempRightOuterMargin(rightOuterMargin)
+    setIsMarginEditMode(false)
+    logger.info('PDFViewer', '余白編集をキャンセル')
+  }
+
+  // 余白をリセット
+  const handleResetMargin = (): void => {
+    setTempLeftOuterMargin(0)
+    setTempLeftInnerMargin(0)
+    setTempRightInnerMargin(0)
+    setTempRightOuterMargin(0)
+    logger.info('PDFViewer', '余白をリセット')
+  }
+
+  // 左ペインの左外側の赤線のドラッグ開始
+  const handleLeftOuterMouseDown = (e: React.MouseEvent): void => {
+    e.preventDefault()
+    isDraggingLeftOuterRef.current = true
+    dragStartXRef.current = e.clientX
+    dragStartLeftOuterRef.current = tempLeftOuterMargin
+  }
+
+  // 左ペインの右内側の赤線のドラッグ開始
+  const handleLeftInnerMouseDown = (e: React.MouseEvent): void => {
+    e.preventDefault()
+    isDraggingLeftInnerRef.current = true
+    dragStartXRef.current = e.clientX
+    dragStartLeftInnerRef.current = tempLeftInnerMargin
+  }
+
+  // 右ペインの左内側の赤線のドラッグ開始
+  const handleRightInnerMouseDown = (e: React.MouseEvent): void => {
+    e.preventDefault()
+    isDraggingRightInnerRef.current = true
+    dragStartXRef.current = e.clientX
+    dragStartRightInnerRef.current = tempRightInnerMargin
+  }
+
+  // 右ペインの右外側の赤線のドラッグ開始
+  const handleRightOuterMouseDown = (e: React.MouseEvent): void => {
+    e.preventDefault()
+    isDraggingRightOuterRef.current = true
+    dragStartXRef.current = e.clientX
+    dragStartRightOuterRef.current = tempRightOuterMargin
+  }
+
+  // ドラッグ中
+  const handleMarginMouseMove = useCallback((e: MouseEvent): void => {
+    const deltaX = e.clientX - dragStartXRef.current
+
+    if (isDraggingLeftOuterRef.current) {
+      const newMargin = Math.max(0, dragStartLeftOuterRef.current - deltaX)
+      setTempLeftOuterMargin(newMargin)
+    } else if (isDraggingLeftInnerRef.current) {
+      const newMargin = Math.max(0, dragStartLeftInnerRef.current - deltaX)
+      setTempLeftInnerMargin(newMargin)
+    } else if (isDraggingRightInnerRef.current) {
+      const newMargin = Math.max(0, dragStartRightInnerRef.current + deltaX)
+      setTempRightInnerMargin(newMargin)
+    } else if (isDraggingRightOuterRef.current) {
+      const newMargin = Math.max(0, dragStartRightOuterRef.current - deltaX)
+      setTempRightOuterMargin(newMargin)
+    }
+  }, [])
+
+  // ドラッグ終了
+  const handleMarginMouseUp = useCallback((): void => {
+    if (isDraggingLeftOuterRef.current || isDraggingLeftInnerRef.current || 
+        isDraggingRightInnerRef.current || isDraggingRightOuterRef.current) {
+      isDraggingLeftOuterRef.current = false
+      isDraggingLeftInnerRef.current = false
+      isDraggingRightInnerRef.current = false
+      isDraggingRightOuterRef.current = false
+    }
+  }, [])
+
+  // ドラッグイベントを登録
+  useEffect(() => {
+    if (!isMarginEditMode) return
+
+    document.addEventListener('mousemove', handleMarginMouseMove)
+    document.addEventListener('mouseup', handleMarginMouseUp)
+
+    return () => {
+      document.removeEventListener('mousemove', handleMarginMouseMove)
+      document.removeEventListener('mouseup', handleMarginMouseUp)
+    }
+  }, [isMarginEditMode, handleMarginMouseMove, handleMarginMouseUp])
+
   return (
     <div className="h-screen flex flex-col bg-gray-100">
       {/* ヘッダー */}
@@ -227,35 +457,92 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
           </Button>
           <h1 className="text-2xl font-bold text-gray-900">{pdfSet.name}</h1>
           <div className="ml-auto flex items-center gap-2">
-            <Button
-              onClick={handleFitToContent}
-              variant="secondary"
-              size="sm"
-              disabled={!scale}
-            >
-              📐 ウィンドウを調整
-            </Button>
-            <Button
-              onClick={() => setAutoResize(!autoResize)}
-              variant={autoResize ? 'primary' : 'secondary'}
-              size="sm"
-            >
-              {autoResize ? '🔄 自動リサイズ: ON' : '🔄 自動リサイズ: OFF'}
-            </Button>
-            <Button
-              onClick={() => setCenterAlign(!centerAlign)}
-              variant={centerAlign ? 'primary' : 'secondary'}
-              size="sm"
-            >
-              {centerAlign ? '中央寄せ: ON' : '中央寄せ: OFF'}
-            </Button>
+            {!isMarginEditMode ? (
+              <>
+                <Button
+                  onClick={handleFitToContent}
+                  variant="secondary"
+                  size="sm"
+                  disabled={!scale}
+                >
+                  📐 ウィンドウを調整
+                </Button>
+                <Button
+                  onClick={() => setAutoResize(!autoResize)}
+                  variant={autoResize ? 'primary' : 'secondary'}
+                  size="sm"
+                >
+                  {autoResize ? '🔄 自動リサイズ: ON' : '🔄 自動リサイズ: OFF'}
+                </Button>
+                <Button
+                  onClick={() => {
+                    const newCenterAlign = !centerAlign
+                    setCenterAlign(newCenterAlign)
+                    
+                    // 中央寄せON時、自動的にscaleを調整
+                    if (newCenterAlign && !autoResize) {
+                      const mainContainer = mainContainerRef.current
+                      if (mainContainer) {
+                        const PDF_BASE_WIDTH = 531
+                        const panelWidth = mainContainer.clientWidth / 2
+                        const totalPadding = 16
+                        const availableWidth = panelWidth - totalPadding - 10
+                        const newScale = availableWidth / PDF_BASE_WIDTH
+                        const finalScale = Math.max(0.3, Math.min(2.5, newScale))
+                        setScale(finalScale)
+                        logger.info('PDFViewer', '🎯 中央寄せ時のscale自動調整', {
+                          panelWidth,
+                          availableWidth,
+                          finalScale: finalScale.toFixed(3),
+                        })
+                      }
+                    }
+                  }}
+                  variant={centerAlign ? 'primary' : 'secondary'}
+                  size="sm"
+                >
+                  {centerAlign ? '中央寄せ: ON' : '中央寄せ: OFF'}
+                </Button>
+                <Button
+                  onClick={handleStartMarginEdit}
+                  variant="secondary"
+                  size="sm"
+                >
+                  ✂️ 余白を非表示
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  onClick={handleResetMargin}
+                  variant="secondary"
+                  size="sm"
+                >
+                  🔄 リセット
+                </Button>
+                <Button
+                  onClick={handleCancelMarginEdit}
+                  variant="secondary"
+                  size="sm"
+                >
+                  ❌ キャンセル
+                </Button>
+                <Button
+                  onClick={handleConfirmMargin}
+                  variant="primary"
+                  size="sm"
+                >
+                  ✅ 確定
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </header>
 
       {/* PDF表示エリア（左右分割） */}
-      <main ref={mainContainerRef} className="flex-1 flex overflow-hidden">
-        <div className="w-1/2 border-r-2 border-gray-400">
+      <main ref={mainContainerRef} className="flex-1 flex overflow-hidden relative">
+        <div className="w-1/2">
           <PDFPanel
             pdfPath={pdfSet.originalPdfPath}
             title="原文"
@@ -264,8 +551,12 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
             align={centerAlign ? 'right' : 'center'}
             scale={scale}
             onScaleChange={setScale}
+            marginLeft={leftOuterMargin}
+            marginRight={leftInnerMargin}
           />
         </div>
+        {/* 中央の境界線 */}
+        <div className="absolute top-0 bottom-0 left-1/2 w-[2px] bg-gray-400 pointer-events-none z-10" style={{ transform: 'translateX(-1px)' }} />
         <div className="w-1/2">
           <PDFPanel
             pdfPath={pdfSet.translatedPdfPath}
@@ -275,8 +566,226 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
             align={centerAlign ? 'left' : 'center'}
             scale={scale}
             onScaleChange={setScale}
+            marginLeft={rightInnerMargin}
+            marginRight={rightOuterMargin}
           />
         </div>
+
+        {/* 左ペイン外側の半透明オーバーレイ */}
+        {isMarginEditMode && tempLeftOuterMargin > 0 && containerRect && (
+          <div
+            style={{
+              position: 'fixed',
+              top: `${containerRect.top}px`,
+              left: `${containerRect.left}px`,
+              width: `${tempLeftOuterMargin}px`,
+              height: `${containerRect.height}px`,
+              backgroundColor: 'rgba(128, 128, 128, 0.5)',
+              pointerEvents: 'none',
+              zIndex: 998,
+            }}
+          />
+        )}
+
+        {/* 左ペイン内側の半透明オーバーレイ */}
+        {isMarginEditMode && tempLeftInnerMargin > 0 && containerRect && (
+          <div
+            style={{
+              position: 'fixed',
+              top: `${containerRect.top}px`,
+              left: `${containerRect.left + containerRect.width / 2 - tempLeftInnerMargin}px`,
+              width: `${tempLeftInnerMargin}px`,
+              height: `${containerRect.height}px`,
+              backgroundColor: 'rgba(128, 128, 128, 0.5)',
+              pointerEvents: 'none',
+              zIndex: 998,
+            }}
+          />
+        )}
+
+        {/* 右ペイン内側の半透明オーバーレイ */}
+        {isMarginEditMode && tempRightInnerMargin > 0 && containerRect && (
+          <div
+            style={{
+              position: 'fixed',
+              top: `${containerRect.top}px`,
+              left: `${containerRect.left + containerRect.width / 2}px`,
+              width: `${tempRightInnerMargin}px`,
+              height: `${containerRect.height}px`,
+              backgroundColor: 'rgba(128, 128, 128, 0.5)',
+              pointerEvents: 'none',
+              zIndex: 998,
+            }}
+          />
+        )}
+
+        {/* 右ペイン外側の半透明オーバーレイ */}
+        {isMarginEditMode && tempRightOuterMargin > 0 && containerRect && (
+          <div
+            style={{
+              position: 'fixed',
+              top: `${containerRect.top}px`,
+              left: `${containerRect.right - tempRightOuterMargin}px`,
+              width: `${tempRightOuterMargin}px`,
+              height: `${containerRect.height}px`,
+              backgroundColor: 'rgba(128, 128, 128, 0.5)',
+              pointerEvents: 'none',
+              zIndex: 998,
+            }}
+          />
+        )}
+
+        {/* 左ペイン外側の赤線とドラッグハンドル */}
+        {isMarginEditMode && containerRect && (
+          <div
+            style={{
+              position: 'fixed',
+              top: `${containerRect.top}px`,
+              left: `${containerRect.left + tempLeftOuterMargin}px`,
+              width: '2px',
+              height: `${containerRect.height}px`,
+              backgroundColor: 'red',
+              cursor: 'ew-resize',
+              zIndex: 1000,
+            }}
+            onMouseDown={handleLeftOuterMouseDown}
+          >
+            <div
+              style={{
+                position: 'absolute',
+                top: '50%',
+                right: '-15px',
+                transform: 'translateY(-50%)',
+                width: '30px',
+                height: '60px',
+                backgroundColor: 'red',
+                borderRadius: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'white',
+                fontSize: '20px',
+                userSelect: 'none',
+              }}
+            >
+              ⇄
+            </div>
+          </div>
+        )}
+
+        {/* 左ペイン内側の赤線とドラッグハンドル */}
+        {isMarginEditMode && containerRect && (
+          <div
+            style={{
+              position: 'fixed',
+              top: `${containerRect.top}px`,
+              left: `${containerRect.left + containerRect.width / 2 - tempLeftInnerMargin}px`,
+              width: '2px',
+              height: `${containerRect.height}px`,
+              backgroundColor: 'red',
+              cursor: 'ew-resize',
+              zIndex: 1001,
+            }}
+            onMouseDown={handleLeftInnerMouseDown}
+          >
+            <div
+              style={{
+                position: 'absolute',
+                top: '50%',
+                left: '-15px',
+                transform: 'translateY(-50%)',
+                width: '30px',
+                height: '60px',
+                backgroundColor: 'red',
+                borderRadius: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'white',
+                fontSize: '20px',
+                userSelect: 'none',
+              }}
+            >
+              ⇄
+            </div>
+          </div>
+        )}
+
+        {/* 右ペイン内側の赤線とドラッグハンドル */}
+        {isMarginEditMode && containerRect && (
+          <div
+            style={{
+              position: 'fixed',
+              top: `${containerRect.top}px`,
+              left: `${containerRect.left + containerRect.width / 2 + tempRightInnerMargin}px`,
+              width: '2px',
+              height: `${containerRect.height}px`,
+              backgroundColor: 'red',
+              cursor: 'ew-resize',
+              zIndex: 1001,
+            }}
+            onMouseDown={handleRightInnerMouseDown}
+          >
+            <div
+              style={{
+                position: 'absolute',
+                top: '50%',
+                right: '-15px',
+                transform: 'translateY(-50%)',
+                width: '30px',
+                height: '60px',
+                backgroundColor: 'red',
+                borderRadius: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'white',
+                fontSize: '20px',
+                userSelect: 'none',
+              }}
+            >
+              ⇄
+            </div>
+          </div>
+        )}
+
+        {/* 右ペイン外側の赤線とドラッグハンドル */}
+        {isMarginEditMode && containerRect && (
+          <div
+            style={{
+              position: 'fixed',
+              top: `${containerRect.top}px`,
+              left: `${containerRect.right - tempRightOuterMargin}px`,
+              width: '2px',
+              height: `${containerRect.height}px`,
+              backgroundColor: 'red',
+              cursor: 'ew-resize',
+              zIndex: 1000,
+            }}
+            onMouseDown={handleRightOuterMouseDown}
+          >
+            <div
+              style={{
+                position: 'absolute',
+                top: '50%',
+                left: '-15px',
+                transform: 'translateY(-50%)',
+                width: '30px',
+                height: '60px',
+                backgroundColor: 'red',
+                borderRadius: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'white',
+                fontSize: '20px',
+                userSelect: 'none',
+              }}
+            >
+              ⇄
+            </div>
+          </div>
+        )}
       </main>
     </div>
   )
