@@ -89,6 +89,8 @@ export function PDFPanel({
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [loadingProgress, setLoadingProgress] = useState<string>('PDF読み込み中...')
+  const [retryTrigger, setRetryTrigger] = useState(0)
   const [totalPages, setTotalPages] = useState(0)
   const [pdfDocument, setPdfDocument] = useState<pdfjsLib.PDFDocumentProxy | null>(null)
   // 親から渡されたscaleを使用
@@ -114,21 +116,45 @@ export function PDFPanel({
   // 0.2 / 900 = 0.00022 (0.022% = 約1/5ページ分)
   // これならページ内でも検出される
 
-  // PDFを読み込む
+  // PDFを読み込む（リトライ・タイムアウト付き）
   useEffect(() => {
     const loadPDF = async (): Promise<void> => {
+      const MAX_RETRIES = 3
+      const TIMEOUT_MS = 30000 // 30秒
+
       setIsLoading(true)
       setError(null)
       renderedPagesRef.current.clear()
 
-      try {
-        const assetUrl = convertFileSrc(pdfPath)
-        console.log('Loading PDF from:', pdfPath, '→', assetUrl)
-        const loadingTask = pdfjsLib.getDocument(assetUrl)
-        const pdf = await loadingTask.promise
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          setLoadingProgress(`PDF読み込み中... (試行 ${attempt}/${MAX_RETRIES})`)
+          logger.info(title, `PDF読み込み試行 ${attempt}/${MAX_RETRIES}`, { pdfPath })
+
+          const assetUrl = convertFileSrc(pdfPath)
+          console.log('Loading PDF from:', pdfPath, '→', assetUrl)
+
+          // タイムアウト付きでPDFを読み込む
+          const loadingTask = pdfjsLib.getDocument(assetUrl)
+          
+          // 読み込み進捗を表示
+          loadingTask.onProgress = (progress: { loaded: number; total: number }) => {
+            if (progress.total > 0) {
+              const percent = Math.round((progress.loaded / progress.total) * 100)
+              setLoadingProgress(`PDF読み込み中... ${percent}% (試行 ${attempt}/${MAX_RETRIES})`)
+            }
+          }
+          
+          const pdf = await Promise.race([
+            loadingTask.promise,
+            new Promise<never>((_, reject) => 
+              setTimeout(() => reject(new Error('PDF読み込みタイムアウト')), TIMEOUT_MS)
+            ),
+          ])
         setPdfDocument(pdf)
         setTotalPages(pdf.numPages)
 
+        setLoadingProgress('スケール計算中...')
         // 最初のページの幅を取得してスケールを計算
         const firstPage = await pdf.getPage(1)
         const initialViewport = firstPage.getViewport({ scale: 1.0 })
@@ -194,17 +220,35 @@ export function PDFPanel({
           dynamicThreshold: dynamicThreshold.toFixed(4),
           thresholdPercentage: (dynamicThreshold * 100).toFixed(2) + '%',
           initialVisibleRange: `${0} - ${Math.min(RENDER_BUFFER, pdf.numPages - 1)}`,
+          試行回数: attempt,
         })
+
+        // 成功したのでループを抜ける
+        return
       } catch (err) {
-        console.error('Error loading PDF:', err)
-        setError(`PDFの読み込みに失敗しました: ${err instanceof Error ? err.message : String(err)}`)
-        setIsLoading(false)
+        const errorMessage = err instanceof Error ? err.message : String(err)
+        logger.error(title, `PDF読み込みエラー (試行 ${attempt}/${MAX_RETRIES})`, {
+          error: errorMessage,
+          pdfPath,
+        })
+
+        // 最後の試行でもエラーが発生した場合
+        if (attempt === MAX_RETRIES) {
+          console.error('Error loading PDF after retries:', err)
+          setError(`PDFの読み込みに失敗しました (${MAX_RETRIES}回試行): ${errorMessage}`)
+          setIsLoading(false)
+          return
+        }
+
+        // リトライ前に少し待つ（1秒）
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
       }
     }
 
     loadPDF()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pdfPath])
+  }, [pdfPath, retryTrigger])
 
   // スクロール比率を同期
   useEffect(() => {
@@ -545,7 +589,12 @@ export function PDFPanel({
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full bg-gray-50">
-        <p className="text-gray-500">読み込み中...</p>
+        <div className="text-center">
+          <div className="mb-4">
+            <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900"></div>
+          </div>
+          <p className="text-gray-500">{loadingProgress}</p>
+        </div>
       </div>
     )
   }
@@ -553,9 +602,20 @@ export function PDFPanel({
   if (error) {
     return (
       <div className="flex items-center justify-center h-full bg-gray-50">
-        <div className="text-center">
-          <p className="text-red-600 mb-2">エラー</p>
-          <p className="text-sm text-gray-600">{error}</p>
+        <div className="text-center max-w-md px-4">
+          <p className="text-red-600 mb-2 font-semibold">エラー</p>
+          <p className="text-sm text-gray-600 mb-4">{error}</p>
+          <button
+            onClick={() => {
+              setError(null)
+              setIsLoading(true)
+              setLoadingProgress('PDF読み込み中...')
+              setRetryTrigger(prev => prev + 1)
+            }}
+            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+          >
+            再読み込み
+          </button>
         </div>
       </div>
     )
@@ -598,8 +658,9 @@ export function PDFPanel({
           className="flex flex-col gap-4 py-4"
           style={{
             alignItems: align === 'right' ? 'flex-end' : align === 'left' ? 'flex-start' : 'center',
-            paddingRight: align === 'right' ? 0 : align === 'left' ? 16 : 16,
-            paddingLeft: align === 'left' ? 0 : align === 'right' ? 16 : 16,
+            // 余白設定がある場合は、該当する側のパディングを0にして中央線にピッタリくっつける
+            paddingRight: align === 'right' ? 0 : align === 'left' && marginLeft > 0 ? 0 : 16,
+            paddingLeft: align === 'left' ? 0 : align === 'right' && marginRight > 0 ? 0 : 16,
             transform: align === 'right' && marginRight > 0 ? `translateX(-${marginRight}px)` 
                      : align === 'left' && marginLeft > 0 ? `translateX(${marginLeft}px)` 
                      : align === 'center' ? `translateX(${(marginLeft - marginRight) / 2}px)` 

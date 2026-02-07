@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, type ChangeEvent } from 'react'
 import type { PDFSet } from '@/domain/PDFSet'
 import { PDFPanel } from './PDFPanel'
 import { Button } from '../common/Button'
@@ -15,6 +15,7 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
   const [centerAlign, setCenterAlign] = useState(false)
   const [scrollRatio, setScrollRatio] = useState(0)
   const [scale, setScale] = useState<number | undefined>(undefined)
+  const [zoomInputValue, setZoomInputValue] = useState<string>('')
   const [autoResize, setAutoResize] = useState(false)
   
   // 余白設定
@@ -129,6 +130,7 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
         スケール: scale.toFixed(3),
         パーセント: `${Math.round(scale * 100)}%`,
       })
+      setZoomInputValue(Math.round(scale * 100).toString())
     }
   }, [scale])
 
@@ -264,6 +266,50 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
       rafIdRef.current = null
     })
   }, [scrollRatio])
+
+  // ズーム: +5%
+  const handleZoomIn = (): void => {
+    if (scale !== undefined) {
+      const newScale = Math.min(2.5, scale * 1.05)
+      setScale(newScale)
+      logger.info('PDFViewer', '🔍 ズームイン', {
+        前: `${Math.round(scale * 100)}%`,
+        後: `${Math.round(newScale * 100)}%`,
+      })
+    }
+  }
+
+  // ズーム: 100%に戻す
+  const handleResetZoom = (): void => {
+    setScale(1.0)
+    logger.info('PDFViewer', '🔍 ズームリセット', { scale: '100%' })
+  }
+
+  // ズーム: 任意の%で表示
+  const handleZoomInputChange = (e: ChangeEvent<HTMLInputElement>): void => {
+    setZoomInputValue(e.target.value)
+  }
+
+  const handleZoomInputSubmit = (): void => {
+    const value = parseInt(zoomInputValue, 10)
+    if (!isNaN(value) && value > 0 && value <= 250) {
+      const newScale = value / 100
+      setScale(newScale)
+      logger.info('PDFViewer', '🔍 ズーム設定', { scale: `${value}%` })
+    } else {
+      logger.warn('PDFViewer', '無効なズーム値', { value: zoomInputValue })
+      // 現在の値に戻す
+      if (scale !== undefined) {
+        setZoomInputValue(Math.round(scale * 100).toString())
+      }
+    }
+  }
+
+  const handleZoomInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (e.key === 'Enter') {
+      handleZoomInputSubmit()
+    }
+  }
 
   // PDFの横幅に合わせてウィンドウサイズを調整
   const handleFitToContent = async (): Promise<void> => {
@@ -459,6 +505,37 @@ export function PDFViewer({ pdfSet, onBack }: PDFViewerProps): React.ReactElemen
           <div className="ml-auto flex items-center gap-2">
             {!isMarginEditMode ? (
               <>
+                {/* ズームコントロール */}
+                <div className="flex items-center gap-2 px-3 py-1 bg-gray-100 rounded">
+                  <Button
+                    onClick={handleZoomIn}
+                    variant="secondary"
+                    size="sm"
+                    disabled={!scale || scale >= 2.5}
+                  >
+                    +5%
+                  </Button>
+                  <Button
+                    onClick={handleResetZoom}
+                    variant="secondary"
+                    size="sm"
+                    disabled={!scale}
+                  >
+                    100%
+                  </Button>
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="text"
+                      value={zoomInputValue}
+                      onChange={handleZoomInputChange}
+                      onKeyDown={handleZoomInputKeyDown}
+                      onBlur={handleZoomInputSubmit}
+                      className="w-12 px-2 py-1 text-sm border border-gray-300 rounded text-center"
+                      disabled={!scale}
+                    />
+                    <span className="text-sm text-gray-600">%</span>
+                  </div>
+                </div>
                 <Button
                   onClick={handleFitToContent}
                   variant="secondary"
