@@ -18,15 +18,7 @@ interface PDFPanelProps {
   marginRight: number  // 右側の余白
 }
 
-// ページ番号を計算する関数
-function calculatePageNumber(scrollTop: number, scrollHeight: number, totalPages: number): number {
-  if (scrollHeight === 0 || totalPages === 0) return 0
-  // スクロール位置の比率からページ番号を推定（0-1の範囲 → 0からtotalPages-1）
-  const ratio = scrollTop / scrollHeight
-  return Math.floor(ratio * totalPages)
-}
-
-/* 
+/*
 // ページ番号からスクロール位置を計算する関数（改善2: 実際のページ高さを使用）
 // DOM要素のgap/paddingを考慮して正確な位置を計算
 // 注: 現在は使用されていないが、将来的にページベースの同期を再実装する際に使用
@@ -159,6 +151,12 @@ export function PDFPanel({
         const firstPage = await pdf.getPage(1)
         const initialViewport = firstPage.getViewport({ scale: 1.0 })
 
+        logger.info(title, 'PDF基本情報', {
+          totalPages: pdf.numPages,
+          firstPageWidth: initialViewport.width,
+          firstPageHeight: initialViewport.height,
+        })
+
         // isLoadingをfalseにしてDOMをレンダリング
         setIsLoading(false)
 
@@ -203,6 +201,28 @@ export function PDFPanel({
         // 計算したスケールでビューポートを再取得
         const viewport = firstPage.getViewport({ scale: finalScale })
         pageHeightsRef.current[0] = viewport.height
+
+        // 全ページの高さを事前に計算（実際のレンダリングはしない）
+        setLoadingProgress('ページ高さを計算中...')
+        logger.info(title, '📏 全ページの高さを事前計算開始', { totalPages: pdf.numPages })
+
+        for (let pageNum = 2; pageNum <= pdf.numPages; pageNum++) {
+          const page = await pdf.getPage(pageNum)
+          const pageViewport = page.getViewport({ scale: finalScale })
+          pageHeightsRef.current[pageNum - 1] = pageViewport.height
+
+          // 進捗を表示（10ページごと）
+          if (pageNum % 10 === 0 || pageNum === pdf.numPages) {
+            const progress = Math.round((pageNum / pdf.numPages) * 100)
+            setLoadingProgress(`ページ高さを計算中... ${progress}%`)
+            logger.debug(title, 'ページ高さ計算進捗', { pageNum, progress: `${progress}%` })
+          }
+        }
+
+        logger.info(title, '✅ 全ページの高さ計算完了', {
+          totalPages: pdf.numPages,
+          heights: pageHeightsRef.current.slice(0, 5).map(h => h?.toFixed(2)),
+        })
 
         // 初期表示範囲を設定
         setVisiblePages({
@@ -368,12 +388,28 @@ export function PDFPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollRatio, totalPages])
 
-  // スクロール位置から表示すべきページ範囲を計算
+  // スクロール位置から表示すべきページ範囲を計算（改善版：実際のページ高さを使用）
   const updateVisiblePages = (scrollTop: number): void => {
     if (totalPages === 0 || !scrollContainerRef.current) return
 
-    const container = scrollContainerRef.current
-    const currentPage = calculatePageNumber(scrollTop, container.scrollHeight, totalPages)
+    const GAP_SIZE = 16
+    const PADDING_TOP = 16
+
+    // 実際のページ高さを使用して現在のページを計算
+    let cumulativeHeight = PADDING_TOP
+    let currentPage = 0
+
+    for (let i = 0; i < totalPages; i++) {
+      const pageHeight = pageHeightsRef.current[i] || 800
+      const pageBottomPosition = cumulativeHeight + pageHeight
+
+      if (scrollTop < pageBottomPosition) {
+        currentPage = i
+        break
+      }
+
+      cumulativeHeight += pageHeight + GAP_SIZE
+    }
 
     // 現在のページ ± RENDER_BUFFER ページを表示
     const start = Math.max(0, currentPage - RENDER_BUFFER)
@@ -383,6 +419,7 @@ export function PDFPanel({
     if (start !== visiblePages.start || end !== visiblePages.end) {
       setVisiblePages({ start, end })
       logger.debug(title, '表示ページ範囲更新', {
+        scrollTop: scrollTop.toFixed(2),
         currentPage,
         start,
         end,
@@ -447,7 +484,23 @@ export function PDFPanel({
 
       // 差分が閾値以上の場合のみ送信
       if (shouldSend) {
-        const currentPage = calculatePageNumber(target.scrollTop, target.scrollHeight, totalPages)
+        // 実際のページ高さを使用して現在のページを計算
+        const GAP_SIZE = 16
+        const PADDING_TOP = 16
+        let cumulativeHeight = PADDING_TOP
+        let currentPage = 0
+
+        for (let i = 0; i < totalPages; i++) {
+          const pageHeight = pageHeightsRef.current[i] || 800
+          const pageBottomPosition = cumulativeHeight + pageHeight
+
+          if (target.scrollTop < pageBottomPosition) {
+            currentPage = i
+            break
+          }
+
+          cumulativeHeight += pageHeight + GAP_SIZE
+        }
 
         logger.info(title, '📤 親に送信！', {
           比率: ratio,
@@ -503,10 +556,28 @@ export function PDFPanel({
     }
   }
 
-  // スケールが変更された時はレンダリング済みフラグをクリア
+  // スケールが変更された時はレンダリング済みフラグをクリア & ページ高さを再計算
   useEffect(() => {
+    if (!pdfDocument || !scale || totalPages === 0) return
+
+    const recalculatePageHeights = async (): Promise<void> => {
+      logger.info(title, '📏 スケール変更によりページ高さを再計算', { scale })
+
+      for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+        const page = await pdfDocument.getPage(pageNum)
+        const viewport = page.getViewport({ scale })
+        pageHeightsRef.current[pageNum - 1] = viewport.height
+      }
+
+      logger.info(title, '✅ ページ高さ再計算完了', {
+        totalPages,
+        sampleHeights: pageHeightsRef.current.slice(0, 3).map(h => h?.toFixed(2)),
+      })
+    }
+
     renderedPagesRef.current.clear()
-  }, [scale])
+    recalculatePageHeights()
+  }, [scale, pdfDocument, totalPages, title])
 
   // 表示範囲のページをレンダリング（仮想スクロール）
   useEffect(() => {
@@ -540,8 +611,7 @@ export function PDFPanel({
           canvas.height = viewport.height
           canvas.width = viewport.width
 
-          // ページ高さを記録（仮想スクロール用）
-          pageHeightsRef.current[pageNum - 1] = viewport.height
+          // ページ高さは既に事前計算済み（pageHeightsRef）
 
           const renderTask = page.render({
             canvasContext: context,
@@ -553,10 +623,9 @@ export function PDFPanel({
           try {
             await renderTask.promise
             renderedPagesRef.current.add(pageNum)
-            logger.debug(title, 'ページレンダリング完了（改善版）', {
+            logger.debug(title, 'ページレンダリング完了', {
               pageNum,
               height: viewport.height,
-              totalRecorded: pageHeightsRef.current.filter((h) => h !== undefined).length,
             })
           } catch (err) {
             // キャンセルエラーは無視
@@ -674,11 +743,15 @@ export function PDFPanel({
                 height: `${(() => {
                   const GAP_SIZE = 16
                   let totalHeight = 0
-                  const estimatedHeight = pageHeightsRef.current[0] || 800
 
-                  // 実際のページ高さを累積
+                  // 実際のページ高さを累積（事前計算済み）
                   for (let i = 0; i < visiblePages.start; i++) {
-                    totalHeight += (pageHeightsRef.current[i] || estimatedHeight) + GAP_SIZE
+                    const pageHeight = pageHeightsRef.current[i]
+                    if (pageHeight) {
+                      totalHeight += pageHeight + GAP_SIZE
+                    } else {
+                      logger.warn(title, 'ページ高さが未計算', { pageIndex: i })
+                    }
                   }
 
                   return totalHeight
@@ -708,11 +781,15 @@ export function PDFPanel({
                 height: `${(() => {
                   const GAP_SIZE = 16
                   let totalHeight = 0
-                  const estimatedHeight = pageHeightsRef.current[0] || 800
 
-                  // 実際のページ高さを累積
+                  // 実際のページ高さを累積（事前計算済み）
                   for (let i = visiblePages.end + 1; i < totalPages; i++) {
-                    totalHeight += (pageHeightsRef.current[i] || estimatedHeight) + GAP_SIZE
+                    const pageHeight = pageHeightsRef.current[i]
+                    if (pageHeight) {
+                      totalHeight += pageHeight + GAP_SIZE
+                    } else {
+                      logger.warn(title, 'ページ高さが未計算', { pageIndex: i })
+                    }
                   }
 
                   return totalHeight
